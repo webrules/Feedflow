@@ -4,7 +4,7 @@ A modern iOS forum reader app that aggregates content from multiple sources incl
 
 ## Features
 
-- **Multi-Forum Support**: Browse 4D4Y, Linux.do (Discourse), Hacker News, V2EX, and RSS feeds
+- **Multi-Forum Support**: Browse 4D4Y, Linux.do, Hacker News, V2EX, and RSS feeds
 - **RSS Integration**: Read RSS/Atom feeds from Hacker Podcast, Ruanyifeng Blog, and O'Reilly Radar
 - **AI-Powered Summaries**: Get AI-generated summaries of threads using Google Gemini
 - **Offline Reading**: Intelligent prefetching and caching for offline access
