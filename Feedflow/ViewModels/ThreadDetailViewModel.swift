@@ -1,0 +1,170 @@
+import Foundation
+import Combine
+import SwiftUI
+
+@MainActor
+class ThreadDetailViewModel: ObservableObject {
+    @Published var thread: Thread
+    @Published var comments: [Comment] = []
+    @Published var isLoading = false
+    @Published var canLoadMore = true
+    @Published var isLatest = false
+    @Published var isBookmarked = false
+    @Published var shouldScrollAfterReply = false
+    @Published var replyingTo: Comment? = nil
+    private var currentPage = 1
+    
+    private let service: ForumService
+    
+    init(thread: Thread, service: ForumService) {
+        self.thread = thread
+        self.service = service
+        self.isBookmarked = DatabaseManager.shared.isBookmarked(threadId: thread.id, serviceId: service.id)
+    }
+    
+    func loadDetails() async {
+        isLoading = true
+        defer { isLoading = false }
+        currentPage = 1
+        isLatest = false
+        
+        // Load from cache first (instant display)
+        if let cached = DatabaseManager.shared.getCachedThread(threadId: thread.id) {
+            self.thread = cached.0
+            self.comments = cached.1
+            self.canLoadMore = !cached.1.isEmpty
+        } else {
+            comments = []
+        }
+        
+        // Fetch fresh data in background
+        do {
+            let (fetchedThread, fetchedComments, totalPages) = try await service.fetchThreadDetail(threadId: thread.id, page: 1)
+            
+            // Merge fetched content
+            let updatedThread = Thread(
+                id: fetchedThread.id,
+                title: fetchedThread.title,
+                content: fetchedThread.content,
+                author: fetchedThread.author,
+                community: self.thread.community,
+                timeAgo: fetchedThread.timeAgo,
+                likeCount: fetchedThread.likeCount,
+                commentCount: fetchedThread.commentCount,
+                isLiked: self.thread.isLiked,
+                tags: fetchedThread.tags
+            )
+            
+            // Save to cache
+            DatabaseManager.shared.saveCachedThread(threadId: thread.id, thread: updatedThread, comments: fetchedComments)
+            
+            // Update UI with fresh data
+            self.thread = updatedThread
+            self.comments = fetchedComments
+            self.isLatest = true
+            
+            // Check max pages logic
+            if let max = totalPages {
+                self.canLoadMore = currentPage < max
+            } else {
+                 self.canLoadMore = !fetchedComments.isEmpty
+            }
+        } catch is CancellationError {
+            // Ignore
+        } catch let error as URLError where error.code == .cancelled {
+            // Ignore
+        } catch {
+            print("Error loading details: \(error)")
+        }
+    }
+    
+    func loadMoreComments() async {
+        guard !isLoading, canLoadMore else { return }
+        isLoading = true
+        defer { isLoading = false }
+        let nextPage = currentPage + 1
+        print("Loading more comments page: \(nextPage)")
+        
+        do {
+            let (_, newComments, totalPages) = try await service.fetchThreadDetail(threadId: thread.id, page: nextPage)
+            
+            if newComments.isEmpty {
+                canLoadMore = false
+            } else {
+                self.comments.append(contentsOf: newComments)
+                currentPage = nextPage
+                
+                // Update canLoadMore based on max pages again if available
+                if let max = totalPages {
+                    self.canLoadMore = currentPage < max
+                }
+            }
+        } catch is CancellationError {
+            // Ignore
+        } catch let error as URLError where error.code == .cancelled {
+            // Ignore
+        } catch {
+            print("Error loading more comments: \(error)")
+        }
+    }
+    
+    func sendReply(content: String) async throws {
+        var finalContent = content
+        
+        if let replyingTo = replyingTo {
+            // format quote
+            // Truncate if too long? For now, full content per requirement.
+            // Discuz style simple quote
+            let quote = "[quote][b]\(replyingTo.author.username) \(LocalizationManager.shared.localizedString("said")):[/b]\n\(replyingTo.content)[/quote]\n\n"
+            finalContent = quote + content
+        }
+        
+        try await service.postComment(topicId: thread.id, categoryId: thread.community.id, content: finalContent)
+        // Refresh to see the new comment - jump to the last page
+        await refreshAfterReply()
+        
+        await MainActor.run {
+            self.replyingTo = nil
+        }
+    }
+    
+    func selectCommentForReply(_ comment: Comment) {
+        replyingTo = comment
+    }
+    
+    func cancelReply() {
+        replyingTo = nil
+    }
+    
+    private func refreshAfterReply() async {
+        isLoading = true
+        defer { isLoading = false }
+        
+        do {
+            // First, get the first page again to see if total pages updated
+            let (_, _, totalPages) = try await service.fetchThreadDetail(threadId: thread.id, page: 1)
+            
+            if let max = totalPages, max > 1 {
+                // If there are multiple pages, fetch the last one
+                let (_, lastPageComments, _) = try await service.fetchThreadDetail(threadId: thread.id, page: max)
+                self.comments = lastPageComments
+                self.currentPage = max
+                self.canLoadMore = false
+            } else {
+                // Just reload page 1
+                let (_, freshComments, _) = try await service.fetchThreadDetail(threadId: thread.id, page: 1)
+                self.comments = freshComments
+                self.currentPage = 1
+                self.canLoadMore = false
+            }
+            self.shouldScrollAfterReply = true
+        } catch {
+            print("Error refreshing after reply: \(error)")
+        }
+    }
+    
+    func toggleBookmark() {
+        DatabaseManager.shared.toggleBookmark(thread: thread, serviceId: service.id)
+        isBookmarked = DatabaseManager.shared.isBookmarked(threadId: thread.id, serviceId: service.id)
+    }
+}

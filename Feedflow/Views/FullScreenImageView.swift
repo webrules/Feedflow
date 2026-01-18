@@ -1,0 +1,90 @@
+import SwiftUI
+
+struct FullScreenImageView: View {
+    let imageURL: String
+    @Binding var isPresented: Bool
+    @State private var rotation: Double = 0
+    @State private var scale: CGFloat = 1.0
+    
+    var body: some View {
+        ZStack {
+            Color.black.ignoresSafeArea()
+            
+            AsyncImage(url: URL(string: imageURL)) { phase in
+                switch phase {
+                case .empty:
+                    ProgressView()
+                        .tint(.white)
+                case .success(let image):
+                    image.resizable()
+                         .aspectRatio(contentMode: .fit)
+                         .rotationEffect(.degrees(rotation))
+                         .scaleEffect(scale)
+                         .gesture(
+                            MagnificationGesture()
+                                .onChanged { value in
+                                    scale = value.magnitude
+                                }
+                         )
+                case .failure:
+                    Text("Failed to load image")
+                        .foregroundColor(.white)
+                @unknown default:
+                    EmptyView()
+                }
+            }
+            
+            // UI Controls overlay
+            VStack {
+                HStack {
+                    Button(action: { isPresented = false }) {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 30))
+                            .foregroundColor(.white)
+                            .padding()
+                    }
+                    Spacer()
+                }
+                
+                Spacer()
+                
+                HStack(spacing: 40) {
+                    Button(action: {
+                        withAnimation {
+                            rotation -= 90
+                        }
+                    }) {
+                        VStack {
+                            Image(systemName: "rotate.left.fill")
+                                .font(.title)
+                            Text("Left")
+                                .font(.caption)
+                        }
+                        .foregroundColor(.white)
+                        .padding()
+                        .background(Color.black.opacity(0.5))
+                        .cornerRadius(10)
+                    }
+                    
+                    Button(action: {
+                        withAnimation {
+                            rotation += 90
+                        }
+                    }) {
+                        VStack {
+                            Image(systemName: "rotate.right.fill")
+                                .font(.title)
+                            Text("Right")
+                                .font(.caption)
+                        }
+                        .foregroundColor(.white)
+                        .padding()
+                        .background(Color.black.opacity(0.5))
+                        .cornerRadius(10)
+                    }
+                }
+                .padding(.bottom, 40)
+            }
+        }
+    }
+}

@@ -1,24 +1,14 @@
-//
-//  ContentView.swift
-//  Feedflow
-//
-//  Created by Zou, Joey on 2026/1/17.
-//
-
 import SwiftUI
+import Combine
 
 struct ContentView: View {
+    @EnvironmentObject var authViewModel: AuthViewModel
     var body: some View {
-        VStack {
-            Image(systemName: "globe")
-                .imageScale(.large)
-                .foregroundStyle(.tint)
-            Text("Hello, world!")
+        NavigationStack {
+            SiteListView()
+                .navigationDestination(for: ForumSite.self) { site in
+                    CommunitiesView(service: site.makeService())
+                }
         }
-        .padding()
     }
-}
-
-#Preview {
-    ContentView()
 }
