@@ -63,7 +63,3 @@ For member-only content on forums like 4D4Y:
 ## License
 
 MIT License - See LICENSE file for details
-
-## Author
-
-Joey Zou (@joeyzou)
