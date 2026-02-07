@@ -27,7 +27,7 @@ struct FullScreenImageView: View {
                                 }
                          )
                 case .failure:
-                    Text("Failed to load image")
+                    Text("failed_load_image".localized())
                         .foregroundColor(.white)
                 @unknown default:
                     EmptyView()
@@ -57,7 +57,7 @@ struct FullScreenImageView: View {
                         VStack {
                             Image(systemName: "rotate.left.fill")
                                 .font(.title)
-                            Text("Left")
+                            Text("rotate_left".localized())
                                 .font(.caption)
                         }
                         .foregroundColor(.white)
@@ -74,7 +74,7 @@ struct FullScreenImageView: View {
                         VStack {
                             Image(systemName: "rotate.right.fill")
                                 .font(.title)
-                            Text("Right")
+                            Text("rotate_right".localized())
                                 .font(.caption)
                         }
                         .foregroundColor(.white)

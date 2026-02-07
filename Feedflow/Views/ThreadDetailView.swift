@@ -2,177 +2,228 @@ import SwiftUI
 
 struct ThreadDetailView: View {
     @StateObject private var viewModel: ThreadDetailViewModel
+    @EnvironmentObject var navigationManager: NavigationManager
     @ObservedObject var localizationManager = LocalizationManager.shared
     @State private var replyText: String = ""
     @State private var showAISummary: Bool = false
     @State private var scrollRequest: UUID? = nil
+    @State private var dragOffset: CGFloat = 0
+    @State private var contentHeight: CGFloat = 0
+    @State private var viewportHeight: CGFloat = 0
     let service: ForumService
     
-    init(thread: Thread, service: ForumService) {
+    init(thread: Thread, service: ForumService, contextThreads: [Thread] = []) {
         self.service = service
-        _viewModel = StateObject(wrappedValue: ThreadDetailViewModel(thread: thread, service: service))
+        _viewModel = StateObject(wrappedValue: ThreadDetailViewModel(thread: thread, service: service, contextThreads: contextThreads))
+    }
+    
+    private var isRSSFeed: Bool {
+        service is RSSService
     }
     
     var body: some View {
         ZStack {
             Color.forumBackground.ignoresSafeArea()
             
-            VStack(spacing: 0) {
-                ScrollViewReader { proxy in
-                    ScrollView {
-                        VStack(alignment: .leading, spacing: 12) {
-                            // Header
-                            HStack {
-                                AvatarView(urlOrName: viewModel.thread.author.avatar, size: 40)
-                                
-                                VStack(alignment: .leading) {
-                                    Text(viewModel.thread.author.username)
-                                        .font(.headline)
-                                        .foregroundColor(.forumTextPrimary)
-                                    if let role = viewModel.thread.author.role {
-                                        TagView(text: role)
-                                    }
-                                }
-                                
-                                Spacer()
+            GeometryReader { outerGeo in
+                VStack(spacing: 0) {
+                    ScrollViewReader { proxy in
+                        ScrollView {
+                            // Offset Reader for Pull Navigation
+                            GeometryReader { geometry in
+                                Color.clear.preference(
+                                    key: DetailScrollOffsetKey.self,
+                                    value: geometry.frame(in: .named("detailScroll")).minY
+                                )
                             }
-                            .id("thread_top")
+                            .frame(height: 0)
                             
-                            // Content
-                            Text(viewModel.thread.title)
-                                .font(.title2)
-                                .bold()
-                                .foregroundColor(.forumTextPrimary)
-                            
-                            // Parsed Content (Text + Images)
-                            ParsedContentView(text: viewModel.thread.content)
-                            
-                            // Tags
-                            if let tags = viewModel.thread.tags, !tags.isEmpty {
-                                ScrollView(.horizontal, showsIndicators: false) {
-                                    HStack {
-                                        ForEach(tags, id: \.self) { tag in
-                                            TagView(text: tag)
+                            VStack(alignment: .leading, spacing: 12) {
+                                // Header
+                                HStack {
+                                    AvatarView(urlOrName: viewModel.thread.author.avatar, size: 40)
+                                    
+                                    VStack(alignment: .leading) {
+                                        Text(viewModel.thread.author.username)
+                                            .font(.headline)
+                                            .foregroundColor(.forumTextPrimary)
+                                        if let role = viewModel.thread.author.role {
+                                            TagView(text: role)
+                                        }
+                                    }
+                                    
+                                    Spacer()
+                                }
+                                .id("thread_top")
+                                
+                                // Content
+                                Text(viewModel.thread.title)
+                                    .font(.title2)
+                                    .bold()
+                                    .foregroundColor(.forumTextPrimary)
+                                
+                                // Parsed Content (Text + Images)
+                                ParsedContentView(text: viewModel.thread.content)
+                                
+                                // Tags
+                                if let tags = viewModel.thread.tags, !tags.isEmpty {
+                                    ScrollView(.horizontal, showsIndicators: false) {
+                                        HStack {
+                                            ForEach(tags, id: \.self) { tag in
+                                                TagView(text: tag)
+                                            }
                                         }
                                     }
                                 }
-                            }
-                            
-                            Divider()
-                                .background(Color.forumTextSecondary.opacity(0.1))
-                                .padding(.vertical, 8)
-                            
-                            if viewModel.isLoading && viewModel.comments.isEmpty {
-                                ProgressView()
-                                    .tint(.forumAccent)
-                                    .scaleEffect(1.5)
-                                    .padding()
-                            } else {
-                                LazyVStack(spacing: 0) {
-                                    ForEach(viewModel.comments) { comment in
-                                        CommentRow(comment: comment) {
-                                            viewModel.selectCommentForReply(comment)
-                                        }
+                                
+                                Divider()
+                                    .background(Color.forumTextSecondary.opacity(0.1))
+                                    .padding(.vertical, 8)
+                                
+                                if viewModel.isLoading && viewModel.comments.isEmpty {
+                                    ProgressView()
+                                        .tint(.forumAccent)
+                                        .scaleEffect(1.5)
+                                        .padding()
+                                } else {
+                                    LazyVStack(spacing: 0) {
+                                        ForEach(viewModel.comments) { comment in
+                                            CommentRow(comment: comment) {
+                                                viewModel.selectCommentForReply(comment)
+                                            }
                                             .onAppear {
                                                 if comment.id == viewModel.comments.last?.id {
                                                     Task { await viewModel.loadMoreComments() }
                                                 }
                                             }
-                                        Divider()
-                                            .background(Color.forumTextSecondary.opacity(0.1))
+                                            Divider()
+                                                .background(Color.forumTextSecondary.opacity(0.1))
+                                        }
+                                        
+                                        if viewModel.isLoading {
+                                            ProgressView()
+                                                .id("loading_indicator")
+                                                .padding()
+                                        }
+                                        
+                                        Color.clear
+                                            .frame(height: 1)
+                                            .id("bottom_anchor")
                                     }
-                                    
-                                    if viewModel.isLoading {
-                                        ProgressView()
-                                            .id("loading_indicator")
-                                            .padding()
-                                    }
-                                    
-                                    Color.clear
-                                        .frame(height: 1)
-                                        .id("bottom_anchor")
                                 }
                             }
-                        }
-                        .padding()
-                    }
-                    .onChange(of: viewModel.comments) { _ in
-                        if viewModel.shouldScrollAfterReply {
-                            Task {
-                                // Give SwiftUI a moment to render the new comment
-                                try? await Task.sleep(nanoseconds: 100_000_000) // 0.1s
-                                await MainActor.run {
-                                    scrollToBottom(proxy: proxy)
-                                    viewModel.shouldScrollAfterReply = false
+                            .padding()
+                            .background(
+                                GeometryReader { geo in
+                                    Color.clear.preference(key: ContentHeightKey.self, value: geo.size.height)
                                 }
+                            )
+                        }
+                        .coordinateSpace(name: "detailScroll")
+                        .onPreferenceChange(DetailScrollOffsetKey.self) { offset in
+                            // Pull Down (Top) -> Previous
+                            if offset > 100 && !viewModel.isLoading {
+                                viewModel.goPrevious()
                             }
-                        }
-                    }
-                }
-                
-                if let replyingTo = viewModel.replyingTo {
-                    HStack {
-                        Text("\(LocalizationManager.shared.localizedString("replying_to")) \(replyingTo.author.username)")
-                            .font(.caption)
-                            .foregroundColor(.forumTextSecondary)
-                        Spacer()
-                        Button(action: {
-                            viewModel.cancelReply()
-                        }) {
-                            Image(systemName: "xmark.circle.fill")
-                                .foregroundColor(.gray)
-                        }
-                    }
-                    .padding(.horizontal)
-                    .padding(.top, 8)
-                    .background(Color.forumBackground)
-                }
-                
-                // Bottom Input
-                VStack(spacing: 0) {
-                    Divider().background(Color.forumTextSecondary.opacity(0.1))
-                    HStack {
-                        Button(action: {}) {
-                            Image(systemName: "photo")
-                                .foregroundColor(.forumTextSecondary)
-                        }
-                        
-                        TextField("thread_reply".localized(), text: $replyText)
-                            .padding(10)
-                            .background(Color.forumCard)
-                            .cornerRadius(20)
-                            .foregroundColor(.forumTextPrimary)
-                        
-                        Button(action: {
-                            guard !replyText.isEmpty else { return }
-                            let content = replyText
-                            let feedback = UINotificationFeedbackGenerator()
-                            feedback.prepare()
                             
-                            Task {
-                                do {
-                                    try await viewModel.sendReply(content: content)
-                                    
-                                    // Reset UI 
+                            // Pull Up (Bottom) -> Next
+                            let contentH = self.contentHeight
+                            let viewportH = self.viewportHeight > 0 ? self.viewportHeight : UIScreen.main.bounds.height
+                            
+                            if contentH > 0 {
+                                let visibleBottom = contentH + offset
+                                if visibleBottom < (viewportH - 100) && !viewModel.isLoading {
+                                     viewModel.goNext()
+                                }
+                            }
+                        }
+                        .onPreferenceChange(ContentHeightKey.self) { height in
+                            self.contentHeight = height
+                        }
+                        .onChange(of: viewModel.comments) { _ in
+                            if viewModel.shouldScrollAfterReply {
+                                Task {
+                                    try? await Task.sleep(nanoseconds: 100_000_000)
                                     await MainActor.run {
-                                        replyText = ""
-                                        feedback.notificationOccurred(.success)
-                                    }
-                                } catch {
-                                    print("Error posting reply: \(error)")
-                                    await MainActor.run {
-                                        feedback.notificationOccurred(.error)
+                                        scrollToBottom(proxy: proxy)
+                                        viewModel.shouldScrollAfterReply = false
                                     }
                                 }
                             }
-                        }) {
-                            Image(systemName: "paperplane.fill")
-                            .foregroundColor(.forumAccent)
+                        }
+                        .onChange(of: viewModel.thread.id) { _ in
+                            proxy.scrollTo("thread_top", anchor: .top)
                         }
                     }
-                    .padding()
-                    .background(Color.forumBackground)
+                    
+                    // Reply toolbar - only for non-RSS feeds, pinned to bottom
+                    if !isRSSFeed {
+                        if let replyingTo = viewModel.replyingTo {
+                            HStack {
+                                Text("\(LocalizationManager.shared.localizedString("replying_to")) \(replyingTo.author.username)")
+                                    .font(.caption)
+                                    .foregroundColor(.forumTextSecondary)
+                                Spacer()
+                                Button(action: {
+                                    viewModel.cancelReply()
+                                }) {
+                                    Image(systemName: "xmark.circle.fill")
+                                        .foregroundColor(.gray)
+                                }
+                            }
+                            .padding(.horizontal)
+                            .padding(.top, 8)
+                            .background(Color.forumBackground)
+                        }
+                        
+                        // Bottom Input
+                        VStack(spacing: 0) {
+                            Divider().background(Color.forumTextSecondary.opacity(0.1))
+                            HStack {
+                                Button(action: {}) {
+                                    Image(systemName: "photo")
+                                        .foregroundColor(.forumTextSecondary)
+                                }
+                                
+                                TextField("thread_reply".localized(), text: $replyText)
+                                    .padding(10)
+                                    .background(Color.forumCard)
+                                    .cornerRadius(20)
+                                    .foregroundColor(.forumTextPrimary)
+                                
+                                Button(action: {
+                                    guard !replyText.isEmpty else { return }
+                                    let content = replyText
+                                    let feedback = UINotificationFeedbackGenerator()
+                                    feedback.prepare()
+                                    
+                                    Task {
+                                        do {
+                                            try await viewModel.sendReply(content: content)
+                                            
+                                            await MainActor.run {
+                                                replyText = ""
+                                                feedback.notificationOccurred(.success)
+                                            }
+                                        } catch {
+                                            print("Error posting reply: \(error)")
+                                            await MainActor.run {
+                                                feedback.notificationOccurred(.error)
+                                            }
+                                        }
+                                    }
+                                }) {
+                                    Image(systemName: "paperplane.fill")
+                                    .foregroundColor(.forumAccent)
+                                }
+                            }
+                            .padding()
+                            .background(Color.forumBackground)
+                        }
+                    }
                 }
+                .onAppear { viewportHeight = outerGeo.size.height }
+                .onChange(of: outerGeo.size) { viewportHeight = $0.height }
             }
         }
         .navigationBarTitleDisplayMode(.inline)
@@ -198,6 +249,13 @@ struct ThreadDetailView: View {
                         showAISummary = true
                     }) {
                         Image(systemName: "sparkles") // AI Icon
+                            .foregroundColor(.forumAccent)
+                    }
+                    
+                    Button(action: {
+                        navigationManager.popToRoot()
+                    }) {
+                        Image(systemName: "house")
                             .foregroundColor(.forumAccent)
                     }
                 }
@@ -384,5 +442,19 @@ struct CommentRow: View {
             }
         }
         .padding(.vertical, 12)
+    }
+}
+
+struct DetailScrollOffsetKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
+    }
+}
+
+struct ContentHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
     }
 }

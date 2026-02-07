@@ -14,7 +14,7 @@ struct BookmarksView: View {
                         Image(systemName: "bookmark.slash")
                             .font(.system(size: 64))
                             .foregroundColor(.forumTextSecondary.opacity(0.5))
-                        Text("No bookmarks yet")
+                        Text("no_bookmarks".localized())
                             .font(.headline)
                             .foregroundColor(.forumTextSecondary)
                     }
@@ -32,11 +32,11 @@ struct BookmarksView: View {
                     }
                 }
             }
-            .navigationTitle("Bookmarks")
+            .navigationTitle("bookmarks".localized())
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
-                    Button("Close") { dismiss() }
+                    Button("close".localized()) { dismiss() }
                         .foregroundColor(.forumAccent)
                 }
             }

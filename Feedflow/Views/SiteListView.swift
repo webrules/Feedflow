@@ -1,12 +1,13 @@
 import SwiftUI
+import Combine
 
-// Define ForumSite enum
+// Define ForumSite enum — ordered: RSS, Hacker News, 4D4Y, V2EX, Linux.do
 enum ForumSite: String, CaseIterable, Identifiable {
-    case fourD4Y
-    case linuxDo
-    case hackerNews
-    case v2ex
     case rss
+    case hackerNews
+    case fourD4Y
+    case v2ex
+    case linuxDo
     
     var id: String { rawValue }
     
@@ -21,13 +22,128 @@ enum ForumSite: String, CaseIterable, Identifiable {
     }
 }
 
+// MARK: - Community Visibility Settings
+
+class CommunitySettingsManager: ObservableObject {
+    static let shared = CommunitySettingsManager()
+    
+    private let key = "enabledCommunities"
+    
+    @Published var enabledSites: Set<String> {
+        didSet {
+            // Ensure RSS is always enabled
+            if !enabledSites.contains(ForumSite.rss.rawValue) {
+                enabledSites.insert(ForumSite.rss.rawValue)
+            }
+            let array = Array(enabledSites)
+            UserDefaults.standard.set(array, forKey: key)
+        }
+    }
+    
+    private init() {
+        if let saved = UserDefaults.standard.stringArray(forKey: key) {
+            self.enabledSites = Set(saved)
+            // Ensure RSS is always present
+            if !self.enabledSites.contains(ForumSite.rss.rawValue) {
+                self.enabledSites.insert(ForumSite.rss.rawValue)
+            }
+        } else {
+            // Default: all communities enabled
+            self.enabledSites = Set(ForumSite.allCases.map { $0.rawValue })
+        }
+    }
+    
+    func isEnabled(_ site: ForumSite) -> Bool {
+        enabledSites.contains(site.rawValue)
+    }
+    
+    func toggle(_ site: ForumSite) {
+        // RSS cannot be toggled off
+        guard site != .rss else { return }
+        if enabledSites.contains(site.rawValue) {
+            enabledSites.remove(site.rawValue)
+        } else {
+            enabledSites.insert(site.rawValue)
+        }
+    }
+    
+    var visibleSites: [ForumSite] {
+        ForumSite.allCases.filter { isEnabled($0) }
+    }
+}
+
+// MARK: - Community Configuration View
+
+struct CommunityConfigView: View {
+    @ObservedObject var settingsManager = CommunitySettingsManager.shared
+    @Environment(\.dismiss) private var dismiss
+    
+    var body: some View {
+        NavigationView {
+            ZStack {
+                Color.forumBackground.ignoresSafeArea()
+                
+                List {
+                    ForEach(ForumSite.allCases) { site in
+                        let service = site.makeService()
+                        let isOn = settingsManager.isEnabled(site)
+                        let isRSS = site == .rss
+                        
+                        HStack(spacing: 14) {
+                            AvatarView(urlOrName: service.logo, size: 32)
+                                .foregroundColor(.forumAccent)
+                            
+                            Text(service.name)
+                                .font(.body)
+                                .foregroundColor(.forumTextPrimary)
+                            
+                            Spacer()
+                            
+                            if isRSS {
+                                // RSS is always on — show a locked checkmark
+                                Image(systemName: "checkmark.circle.fill")
+                                    .foregroundColor(.forumAccent)
+                                    .font(.title3)
+                            } else {
+                                Toggle("", isOn: Binding(
+                                    get: { isOn },
+                                    set: { _ in settingsManager.toggle(site) }
+                                ))
+                                .tint(.forumAccent)
+                                .labelsHidden()
+                            }
+                        }
+                        .padding(.vertical, 4)
+                        .listRowBackground(Color.forumCard)
+                    }
+                }
+                .scrollContentBackground(.hidden)
+            }
+            .navigationTitle("communities".localized())
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("done".localized()) {
+                        dismiss()
+                    }
+                    .foregroundColor(.forumAccent)
+                }
+            }
+        }
+    }
+}
+
+// MARK: - Site List (Home Page)
+
 struct SiteListView: View {
     // No callback needed, NavigationLink handles it
     @EnvironmentObject var themeManager: ThemeManager
     @ObservedObject var localizationManager = LocalizationManager.shared
+    @ObservedObject var communitySettings = CommunitySettingsManager.shared
     @State private var showSettings: Bool = false
     @State private var showLogin: Bool = false
     @State private var showBookmarks: Bool = false
+    @State private var showCommunityConfig: Bool = false
     
     var body: some View {
         ZStack {
@@ -41,7 +157,7 @@ struct SiteListView: View {
                     .padding(.top, 40)
                 
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 16)], spacing: 16) {
-                    ForEach(ForumSite.allCases) { site in
+                    ForEach(communitySettings.visibleSites) { site in
                         let service = site.makeService()
                         
                         NavigationLink(value: site) {
@@ -72,6 +188,13 @@ struct SiteListView: View {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     HStack(spacing: 16) {
                         Button(action: {
+                            showCommunityConfig = true
+                        }) {
+                            Image(systemName: "gearshape")
+                                .foregroundColor(.forumTextPrimary)
+                        }
+                        
+                        Button(action: {
                             themeManager.isDarkMode.toggle()
                         }) {
                             Image(systemName: themeManager.isDarkMode ? "sun.max.fill" : "moon.fill")
@@ -82,7 +205,7 @@ struct SiteListView: View {
                             LocalizationManager.shared.currentLanguage = 
                                 LocalizationManager.shared.currentLanguage == "en" ? "zh" : "en"
                         }) {
-                            Text(LocalizationManager.shared.currentLanguage == "en" ? "中" : "EN")
+                            Text(LocalizationManager.shared.currentLanguage == "en" ? "EN" : "中")
                                 .font(.system(size: 14, weight: .semibold))
                                 .foregroundColor(.forumTextPrimary)
                         }
@@ -122,6 +245,9 @@ struct SiteListView: View {
             }
             .sheet(isPresented: $showBookmarks) {
                 BookmarksView()
+            }
+            .sheet(isPresented: $showCommunityConfig) {
+                CommunityConfigView()
             }
         }
     }
