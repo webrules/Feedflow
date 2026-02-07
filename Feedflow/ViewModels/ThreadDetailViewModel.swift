@@ -15,11 +15,36 @@ class ThreadDetailViewModel: ObservableObject {
     private var currentPage = 1
     
     private let service: ForumService
+    private let contextThreads: [Thread]
     
-    init(thread: Thread, service: ForumService) {
+    init(thread: Thread, service: ForumService, contextThreads: [Thread] = []) {
         self.thread = thread
         self.service = service
+        self.contextThreads = contextThreads
         self.isBookmarked = DatabaseManager.shared.isBookmarked(threadId: thread.id, serviceId: service.id)
+    }
+    
+    func goPrevious() {
+        guard let index = contextThreads.firstIndex(where: { $0.id == thread.id }), index > 0 else { return }
+        let prev = contextThreads[index - 1]
+        switchToThread(prev)
+    }
+    
+    func goNext() {
+        guard let index = contextThreads.firstIndex(where: { $0.id == thread.id }), index < contextThreads.count - 1 else { return }
+        let next = contextThreads[index + 1]
+        switchToThread(next)
+    }
+    
+    private func switchToThread(_ newThread: Thread) {
+        self.thread = newThread
+        self.comments = []
+        self.currentPage = 1
+        self.isBookmarked = DatabaseManager.shared.isBookmarked(threadId: newThread.id, serviceId: service.id)
+        
+        Task {
+            await loadDetails()
+        }
     }
     
     func loadDetails() async {

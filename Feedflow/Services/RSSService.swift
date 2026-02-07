@@ -1,4 +1,5 @@
 import Foundation
+import Combine
 
 @MainActor
 class RSSService: ForumService {
@@ -10,19 +11,70 @@ class RSSService: ForumService {
     // Mapping: ThreadID -> Thread
     private var threadCache: [String: Thread] = [:]
     
-    struct FeedInfo {
-        let id: String
-        let name: String
-        let url: String
-        let description: String
+    
+    public struct FeedInfo: Codable, Identifiable {
+        public let id: String
+        public let name: String
+        public let url: String
+        public let description: String
+        
+        public init(id: String, name: String, url: String, description: String) {
+            self.id = id
+            self.name = name
+            self.url = url
+            self.description = description
+        }
     }
     
-    private let feeds = [
+    @Published private(set) var feeds: [FeedInfo] = []
+    
+    private let defaultFeeds = [
         FeedInfo(id: "hacker_podcast", name: "Hacker Podcast", url: "https://hacker-podcast.agi.li/rss.xml", description: "Hacker News Recap"),
         FeedInfo(id: "ruanyifeng", name: "Ruanyifeng Blog", url: "https://www.ruanyifeng.com/blog/atom.xml", description: "Tech and Humanities"),
         FeedInfo(id: "oreilly", name: "O'Reilly Radar", url: "https://www.oreilly.com/radar/feed/", description: "Tech Trends")
     ]
     
+    init() {
+        loadFeeds()
+    }
+    
+    private func loadFeeds() {
+        if let data = UserDefaults.standard.data(forKey: "custom_rss_feeds"),
+           let decoded = try? JSONDecoder().decode([FeedInfo].self, from: data) {
+            self.feeds = decoded
+        } else {
+            self.feeds = defaultFeeds
+        }
+    }
+    
+    private func saveFeeds() {
+        if let encoded = try? JSONEncoder().encode(feeds) {
+            UserDefaults.standard.set(encoded, forKey: "custom_rss_feeds")
+        }
+    }
+    
+    func addFeed(name: String, url: String) {
+        let id = UUID().uuidString
+        let newFeed = FeedInfo(id: id, name: name, url: url, description: "")
+        feeds.append(newFeed)
+        saveFeeds()
+    }
+    
+    func addFeeds(_ newFeeds: [FeedInfo]) {
+        self.feeds.append(contentsOf: newFeeds)
+        saveFeeds()
+    }
+    
+    func removeFeed(id: String) {
+        feeds.removeAll { $0.id == id }
+        saveFeeds()
+    }
+    
+    func removeFeeds(ids: Set<String>) {
+        feeds.removeAll { ids.contains($0.id) }
+        saveFeeds()
+    }
+
     func fetchCategories() async throws -> [Community] {
         return feeds.map { feed in
             Community(
@@ -115,7 +167,60 @@ class RSSService: ForumService {
         return thread.id // ID is the link in our RSS parser
     }
     
-    private func cleanContent(_ html: String) -> String {
+    func fetchDailyUpdates() async -> [Thread] {
+        return await withTaskGroup(of: [Thread].self) { group in
+            for feed in feeds {
+                group.addTask {
+                    guard let url = URL(string: feed.url) else { return [] }
+                    do {
+                        let (data, _) = try await URLSession.shared.data(from: url)
+                        let parser = RSSParser(data: data)
+                        let threads = await parser.parse()
+                        
+                        // Filter items from last 24 hours
+                        // Logic: timeAgo uses "m" (minutes) or "h" (hours) for < 24h.
+                        // "d" (days) implies >= 24h.
+                        let recentThreads = threads.filter { thread in
+                            let t = thread.timeAgo
+                            return t == "just now" || t.hasSuffix("m") || t.hasSuffix("h")
+                        }
+                        
+                        let community = Community(id: feed.id, name: feed.name, description: "", category: "RSS", activeToday: 0, onlineNow: 0)
+                        
+                        return recentThreads.map { thread in
+                            Thread(
+                                id: thread.id,
+                                title: thread.title,
+                                content: self.cleanContent(thread.content),
+                                author: thread.author,
+                                community: community,
+                                timeAgo: thread.timeAgo,
+                                likeCount: thread.likeCount,
+                                commentCount: thread.commentCount,
+                                isLiked: thread.isLiked,
+                                tags: thread.tags
+                            )
+                        }
+                    } catch {
+                        print("Error fetching daily updates for \(feed.name): \(error)")
+                        return []
+                    }
+                }
+            }
+            
+            var allThreads: [Thread] = []
+            for await threads in group {
+                allThreads.append(contentsOf: threads)
+            }
+            
+            // Sort by time? "formatted timeAgo" is hard to sort.
+            // But usually feeds are sorted.
+            // We can just return them.
+            return allThreads
+        }
+    }
+    
+    private nonisolated func cleanContent(_ html: String) -> String {
         var processed = html
         
         // 0. Remove scripts and styles

@@ -2,7 +2,10 @@ import SwiftUI
 
 struct CommunitiesView: View {
     @StateObject private var viewModel: ForumViewModel
+    @EnvironmentObject var navigationManager: NavigationManager
     let service: ForumService
+    @State private var showFeedManager = false
+    @State private var showDailySummary = false
     
     init(service: ForumService) {
         self.service = service
@@ -40,14 +43,51 @@ struct CommunitiesView: View {
         .toolbarBackground(Color.forumBackground, for: .navigationBar)
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
-                Button(action: {
-                    Task {
-                        await viewModel.refresh()
+                HStack(spacing: 16) {
+                    // Show "Manage Feeds" button only for RSS
+                    if service.id == "rss" {
+                        Button(action: {
+                            showDailySummary = true
+                        }) {
+                            Image(systemName: "sparkles.rectangle.stack")
+                                .foregroundColor(.forumAccent)
+                        }
+                        
+                        Button(action: {
+                            showFeedManager = true
+                        }) {
+                            Image(systemName: "list.bullet.rectangle.portrait")
+                                .foregroundColor(.forumAccent)
+                        }
                     }
-                }) {
-                    Image(systemName: "arrow.clockwise")
-                        .foregroundColor(.forumTextPrimary)
+                    
+                    Button(action: {
+                        Task {
+                            await viewModel.refresh()
+                        }
+                    }) {
+                        Image(systemName: "arrow.clockwise")
+                            .foregroundColor(.forumTextPrimary)
+                    }
+                    
+                    Button(action: {
+                        navigationManager.popToRoot()
+                    }) {
+                        Image(systemName: "house")
+                            .foregroundColor(.forumTextPrimary)
+                    }
                 }
+            }
+        }
+        .sheet(isPresented: $showFeedManager, onDismiss: {
+            // Refresh communities after managing feeds
+            Task { await viewModel.refresh() }
+        }) {
+            RSSFeedManagerView()
+        }
+        .sheet(isPresented: $showDailySummary) {
+            if let rssService = service as? RSSService {
+                DailyRSSSummaryView(rssService: rssService)
             }
         }
         .navigationDestination(for: Community.self) { community in

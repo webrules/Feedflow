@@ -28,18 +28,21 @@ class ThreadListViewModel: ObservableObject {
         // Create cache key
         let cacheKey = "\(service.id)_\(community.id)_page1"
         
+        // Attempt to load from cache
+        let cachedThreads = DatabaseManager.shared.getCachedTopics(cacheKey: cacheKey)
+        
         // If returning from detail or cache exists, load cache first
-        if isReturning || DatabaseManager.shared.getCachedTopics(cacheKey: cacheKey) != nil {
-            if let cachedThreads = DatabaseManager.shared.getCachedTopics(cacheKey: cacheKey) {
-                self.threads = cachedThreads
-                self.canLoadMore = !cachedThreads.isEmpty
+        if isReturning || cachedThreads != nil {
+            if let threads = cachedThreads, !threads.isEmpty {
+                self.threads = threads
+                self.canLoadMore = true
                 self.currentPage = 1
             }
             
             // Fetch fresh data in background
             await fetchFreshData(for: community, cacheKey: cacheKey)
         } else {
-            // First time loading - show loading state
+            // First time loading without cache - show loading state
             isLoading = true
             defer { isLoading = false }
             currentPage = 1

@@ -276,6 +276,28 @@ class DatabaseManager {
         return result
     }
     
+    /// Returns cached summary only if it was created within `maxAgeSeconds` ago.
+    func getSummaryIfFresh(threadId: String, maxAgeSeconds: TimeInterval) -> String? {
+        let sql = "SELECT summary, created_at FROM ai_summaries WHERE thread_id = ?;"
+        var statement: OpaquePointer?
+        var result: String?
+        
+        if sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK {
+            sqlite3_bind_text(statement, 1, (threadId as NSString).utf8String, -1, nil)
+            if sqlite3_step(statement) == SQLITE_ROW {
+                if let val = sqlite3_column_text(statement, 0) {
+                    let createdAt = TimeInterval(sqlite3_column_int64(statement, 1))
+                    let age = Date().timeIntervalSince1970 - createdAt
+                    if age < maxAgeSeconds {
+                        result = String(cString: val)
+                    }
+                }
+            }
+        }
+        sqlite3_finalize(statement)
+        return result
+    }
+    
     // MARK: - Content Caching
     
     private func createCacheTables() {
@@ -331,11 +353,21 @@ class DatabaseManager {
         
         if sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK {
             sqlite3_bind_text(statement, 1, (cacheKey as NSString).utf8String, -1, nil)
-            if sqlite3_step(statement) == SQLITE_ROW,
-               let jsonString = sqlite3_column_text(statement, 0),
-               let jsonData = String(cString: jsonString).data(using: .utf8) {
-                result = try? JSONDecoder().decode([Thread].self, from: jsonData)
+            if sqlite3_step(statement) == SQLITE_ROW {
+                if let jsonStringPtr = sqlite3_column_text(statement, 0) {
+                    let jsonString = String(cString: jsonStringPtr)
+                    if let jsonData = jsonString.data(using: .utf8) {
+                        do {
+                            result = try JSONDecoder().decode([Thread].self, from: jsonData)
+                            // print("[DatabaseManager] Successfully loaded \(result?.count ?? 0) cached topics for \(cacheKey)")
+                        } catch {
+                            print("[DatabaseManager] Failed to decode cached topics for \(cacheKey): \(error)")
+                        }
+                    }
+                }
             }
+        } else {
+            print("[DatabaseManager] SELECT statement could not be prepared for cached_topics")
         }
         sqlite3_finalize(statement)
         return result

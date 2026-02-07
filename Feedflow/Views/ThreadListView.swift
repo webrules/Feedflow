@@ -2,6 +2,7 @@ import SwiftUI
 
 struct ThreadListView: View {
     @StateObject private var viewModel: ThreadListViewModel
+    @EnvironmentObject var navigationManager: NavigationManager
     let community: Community
     let service: ForumService
     @State private var isInitialLoad = true
@@ -34,7 +35,7 @@ struct ThreadListView: View {
                         
                         LazyVStack(spacing: 0) {
                             ForEach(viewModel.threads) { thread in
-                                NavigationLink(destination: ThreadDetailView(thread: thread, service: service)) {
+                                NavigationLink(destination: ThreadDetailView(thread: thread, service: service, contextThreads: viewModel.threads)) {
                                     ThreadRow(thread: thread)
                                         .onAppear {
                                             viewModel.prefetchThread(thread: thread)
@@ -69,12 +70,21 @@ struct ThreadListView: View {
         .navigationTitle(community.name)
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
-                 Button(action: {
-                    Task { await viewModel.loadTopics(for: community, isReturning: false) }
-                }) {
-                    Image(systemName: "arrow.clockwise")
-                        .foregroundColor(.forumAccent)
-                }
+                 HStack(spacing: 16) {
+                     Button(action: {
+                        Task { await viewModel.loadTopics(for: community, isReturning: false) }
+                    }) {
+                        Image(systemName: "arrow.clockwise")
+                            .foregroundColor(.forumAccent)
+                    }
+                    
+                    Button(action: {
+                        navigationManager.popToRoot()
+                    }) {
+                        Image(systemName: "house")
+                            .foregroundColor(.forumAccent)
+                    }
+                 }
             }
         }
         .overlay(
@@ -116,23 +126,25 @@ struct ThreadRow: View {
     
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 6) {
-                AvatarView(urlOrName: thread.author.avatar, size: 16)
-                
-                Text("@\(thread.author.username)")
-                    .foregroundColor(.forumTextSecondary)
-                
-                Text("• \(thread.timeAgo)")
-                    .foregroundColor(.forumTextSecondary)
-                Spacer()
-                
-                HStack(spacing: 4) {
-                    Image(systemName: "bubble.left")
-                    Text("\(thread.commentCount)")
+            if thread.community.category != "RSS" {
+                HStack(spacing: 6) {
+                    AvatarView(urlOrName: thread.author.avatar, size: 16)
+                    
+                    Text("@\(thread.author.username)")
+                        .foregroundColor(.forumTextSecondary)
+                    
+                    Text("• \(thread.timeAgo)")
+                        .foregroundColor(.forumTextSecondary)
+                    Spacer()
+                    
+                    HStack(spacing: 4) {
+                        Image(systemName: "bubble.left")
+                        Text("\(thread.commentCount)")
+                    }
                 }
+                .font(.caption)
+                .foregroundColor(.forumTextSecondary)
             }
-            .font(.caption)
-            .foregroundColor(.forumTextSecondary)
             
             Text(thread.title)
                 .font(.headline)
@@ -140,6 +152,7 @@ struct ThreadRow: View {
                 .lineLimit(2)
                 .multilineTextAlignment(.leading)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .padding()
         .background(Color.forumBackground)
     }
