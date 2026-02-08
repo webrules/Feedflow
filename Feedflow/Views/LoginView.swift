@@ -5,7 +5,7 @@ struct LoginView: View {
     @ObservedObject var localizationManager = LocalizationManager.shared
     
     // Sites that support login (excludes RSS)
-    private let loginSites: [ForumSite] = [.hackerNews, .fourD4Y, .v2ex, .linuxDo]
+    private let loginSites: [ForumSite] = [.hackerNews, .fourD4Y, .v2ex, .linuxDo, .zhihu]
     
     @State private var selectedSite: ForumSite = .fourD4Y
     @State private var showWebLogin = false
@@ -68,7 +68,7 @@ struct LoginView: View {
                 .foregroundColor(.forumTextSecondary)
                 .textCase(.uppercase)
             
-            HStack(spacing: 12) {
+            HStack(spacing: 8) {
                 ForEach(loginSites) { site in
                     Button(action: {
                         withAnimation(.easeInOut(duration: 0.2)) {
@@ -76,8 +76,7 @@ struct LoginView: View {
                         }
                     }) {
                         VStack(spacing: 6) {
-                            Image(systemName: site.makeService().logo)
-                                .font(.system(size: 22))
+                            siteLogoView(site: site)
                                 .frame(width: 44, height: 44)
                                 .background(
                                     selectedSite == site
@@ -89,6 +88,7 @@ struct LoginView: View {
                             Text(siteShortName(site))
                                 .font(.system(size: 11, weight: .medium))
                                 .lineLimit(1)
+                                .minimumScaleFactor(0.8)
                             
                             if loginStatus[site.makeService().id] == true {
                                 Image(systemName: "checkmark.circle.fill")
@@ -109,6 +109,33 @@ struct LoginView: View {
             .padding()
             .background(Color.forumCard)
             .cornerRadius(16)
+        }
+    }
+    
+    @ViewBuilder
+    private func siteLogoView(site: ForumSite) -> some View {
+        let logo = site.makeService().logo
+        if logo.hasPrefix("http") {
+            // URL-based logo (e.g., Linux.do)
+            AsyncImage(url: URL(string: logo)) { phase in
+                switch phase {
+                case .success(let image):
+                    image.resizable()
+                        .aspectRatio(contentMode: .fit)
+                        .frame(width: 24, height: 24)
+                        .clipShape(RoundedRectangle(cornerRadius: 4))
+                case .failure:
+                    Image(systemName: "globe")
+                        .font(.system(size: 22))
+                default:
+                    ProgressView()
+                        .frame(width: 24, height: 24)
+                }
+            }
+        } else {
+            // SF Symbol logo
+            Image(systemName: logo)
+                .font(.system(size: 22))
         }
     }
     
@@ -249,6 +276,11 @@ struct LoginView: View {
             print("[Login]   - \(cookie.name) = \(cookie.value.prefix(20))... (domain: \(cookie.domain), path: \(cookie.path), expires: \(cookie.expiresDate?.description ?? "session"))")
         }
         
+        // Critical check for Zhihu authentication token
+        if site == .zhihu && !relevantCookies.contains(where: { $0.name == "z_c0" }) {
+            print("[Login] CRITICAL WARNING: Zhihu login success but 'z_c0' cookie is missing! API requests will likely fail.")
+        }
+        
         DatabaseManager.shared.replaceCookies(siteId: siteId, cookies: relevantCookies)
         
         // Verify cookies were persisted
@@ -268,6 +300,7 @@ struct LoginView: View {
         case .hackerNews: return "ycombinator.com"
         case .v2ex: return "v2ex.com"
         case .linuxDo: return "linux.do"
+        case .zhihu: return "zhihu.com"
         case .rss: return ""
         }
     }
@@ -284,7 +317,8 @@ struct LoginView: View {
         case .hackerNews: return "HN"
         case .fourD4Y: return "4D4Y"
         case .v2ex: return "V2EX"
-        case .linuxDo: return "Linux"
+        case .linuxDo: return "Linux.do"
+        case .zhihu: return "知乎"
         case .rss: return "RSS"
         }
     }

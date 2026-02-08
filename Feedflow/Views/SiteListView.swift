@@ -1,13 +1,14 @@
 import SwiftUI
 import Combine
 
-// Define ForumSite enum — ordered: RSS, Hacker News, 4D4Y, V2EX, Linux.do
+// Define ForumSite enum — ordered: RSS, Hacker News, 4D4Y, V2EX, Linux.do, Zhihu
 enum ForumSite: String, CaseIterable, Identifiable {
     case rss
     case hackerNews
     case fourD4Y
     case v2ex
     case linuxDo
+    case zhihu
     
     var id: String { rawValue }
     
@@ -18,6 +19,7 @@ enum ForumSite: String, CaseIterable, Identifiable {
         case .hackerNews: return HackerNewsService()
         case .v2ex: return V2EXService()
         case .rss: return RSSService()
+        case .zhihu: return ZhihuService()
         }
     }
 }

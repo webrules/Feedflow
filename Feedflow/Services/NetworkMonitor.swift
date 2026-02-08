@@ -14,7 +14,12 @@ class NetworkMonitor: ObservableObject {
         monitor.pathUpdateHandler = { [weak self] path in
             DispatchQueue.main.async {
                 self?.isConnected = path.status == .satisfied
+                #if targetEnvironment(simulator)
+                // Simulator doesn't report WiFi correctly; treat any connection as WiFi
+                self?.isWiFi = path.status == .satisfied
+                #else
                 self?.isWiFi = path.usesInterfaceType(.wifi)
+                #endif
             }
         }
         monitor.start(queue: queue)

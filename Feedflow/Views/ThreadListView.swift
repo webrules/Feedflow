@@ -48,6 +48,27 @@ struct ThreadListView: View {
                                         }
                                 }
                                 .buttonStyle(PlainButtonStyle())
+                                .if(service is ZhihuService) { view in
+                                    view.contextMenu {
+                                        Button(role: .destructive) {
+                                            Task {
+                                                // Remove from UI immediately
+                                                await MainActor.run {
+                                                    withAnimation {
+                                                        viewModel.removeThread(thread)
+                                                    }
+                                                }
+                                                // Also send downvote API call if possible
+                                                if let zhihuService = service as? ZhihuService,
+                                                   let feedItem = zhihuService.getFeedItem(for: thread.id) {
+                                                    await zhihuService.downvoteItem(feedItem: feedItem)
+                                                }
+                                            }
+                                        } label: {
+                                            Label("不感兴趣", systemImage: "hand.thumbsdown.fill")
+                                        }
+                                    }
+                                }
                                 
                                 Divider()
                                     .background(Color.white.opacity(0.1))
@@ -137,6 +158,29 @@ struct ThreadRow: View {
                         .foregroundColor(.forumTextSecondary)
                     Spacer()
                     
+                    // Show Zhihu content type tags
+                    if thread.community.category == "zhihu", let tags = thread.tags, !tags.isEmpty {
+                        ForEach(tags, id: \.self) { tag in
+                            Text(tag)
+                                .font(.system(size: 10, weight: .semibold))
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(zhihuTagColor(tag).opacity(0.15))
+                                .foregroundColor(zhihuTagColor(tag))
+                                .cornerRadius(4)
+                        }
+                    }
+                    
+                    // Show vote count for Zhihu
+                    if thread.community.category == "zhihu" && thread.likeCount > 0 {
+                        HStack(spacing: 2) {
+                            Image(systemName: "hand.thumbsup.fill")
+                            Text("\(thread.likeCount)")
+                        }
+                        .font(.caption2)
+                        .foregroundColor(.forumTextSecondary)
+                    }
+                    
                     HStack(spacing: 4) {
                         Image(systemName: "bubble.left")
                         Text("\(thread.commentCount)")
@@ -151,9 +195,29 @@ struct ThreadRow: View {
                 .foregroundColor(.forumTextPrimary)
                 .lineLimit(2)
                 .multilineTextAlignment(.leading)
+            
+            // Show excerpt for Zhihu content
+            if thread.community.category == "zhihu" && !thread.content.isEmpty {
+                Text(thread.content)
+                    .font(.subheadline)
+                    .foregroundColor(.forumTextSecondary)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.leading)
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding()
         .background(Color.forumBackground)
+    }
+    
+    private func zhihuTagColor(_ tag: String) -> Color {
+        switch tag {
+        case "回答": return .blue
+        case "文章": return .green
+        case "问题": return .orange
+        case "视频": return .purple
+        case "想法": return .pink
+        default: return .gray
+        }
     }
 }

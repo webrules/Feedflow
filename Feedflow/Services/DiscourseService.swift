@@ -88,6 +88,57 @@ class DiscourseService: ForumService {
             case categoryId = "category_id"
             case posters
         }
+        
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            id = try container.decode(Int.self, forKey: .id)
+            title = try container.decode(String.self, forKey: .title)
+            fancyTitle = try container.decodeIfPresent(String.self, forKey: .fancyTitle)
+            slug = try container.decode(String.self, forKey: .slug)
+            postsCount = try container.decode(Int.self, forKey: .postsCount)
+            replyCount = try container.decodeIfPresent(Int.self, forKey: .replyCount)
+            likeCount = try container.decodeIfPresent(Int.self, forKey: .likeCount)
+            views = try container.decode(Int.self, forKey: .views)
+            createdAt = try container.decode(String.self, forKey: .createdAt)
+            bumpedAt = try container.decodeIfPresent(String.self, forKey: .bumpedAt)
+            categoryId = try container.decodeIfPresent(Int.self, forKey: .categoryId)
+            posters = try container.decodeIfPresent([ThreadPoster].self, forKey: .posters)
+            
+            // tags can be [String] or [{"name": "...", ...}]
+            if let stringTags = try? container.decode([String].self, forKey: .tags) {
+                tags = stringTags
+            } else if let dictTags = try? container.decode([[String: AnyCodable]].self, forKey: .tags) {
+                tags = dictTags.compactMap { $0["name"]?.stringValue }
+            } else {
+                tags = nil
+            }
+        }
+    }
+    
+    // Helper for decoding mixed-type JSON values
+    struct AnyCodable: Codable {
+        let value: Any
+        
+        var stringValue: String? {
+            value as? String
+        }
+        
+        init(from decoder: Decoder) throws {
+            let container = try decoder.singleValueContainer()
+            if let str = try? container.decode(String.self) { value = str }
+            else if let int = try? container.decode(Int.self) { value = int }
+            else if let bool = try? container.decode(Bool.self) { value = bool }
+            else if let dbl = try? container.decode(Double.self) { value = dbl }
+            else { value = "" }
+        }
+        
+        func encode(to encoder: Encoder) throws {
+            var container = encoder.singleValueContainer()
+            if let str = value as? String { try container.encode(str) }
+            else if let int = value as? Int { try container.encode(int) }
+            else if let bool = value as? Bool { try container.encode(bool) }
+            else if let dbl = value as? Double { try container.encode(dbl) }
+        }
     }
     
     struct ThreadPoster: Codable {
@@ -118,6 +169,22 @@ class DiscourseService: ForumService {
         enum CodingKeys: String, CodingKey {
             case id, title, tags
             case threadStream = "post_stream"
+        }
+        
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            id = try container.decode(Int.self, forKey: .id)
+            title = try container.decode(String.self, forKey: .title)
+            threadStream = try container.decode(ThreadStream.self, forKey: .threadStream)
+            
+            // tags can be [String] or [{"name": "...", ...}]
+            if let stringTags = try? container.decode([String].self, forKey: .tags) {
+                tags = stringTags
+            } else if let dictTags = try? container.decode([[String: AnyCodable]].self, forKey: .tags) {
+                tags = dictTags.compactMap { $0["name"]?.stringValue }
+            } else {
+                tags = nil
+            }
         }
     }
     

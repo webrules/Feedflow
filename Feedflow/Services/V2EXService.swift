@@ -11,9 +11,99 @@ class V2EXService: ForumService {
         return "\(baseURL)/t/\(thread.id)"
     }
     
-    // Read-Only service for now
+    // Post a reply to a V2EX topic
     func postComment(topicId: String, categoryId: String, content: String) async throws {
-        throw NSError(domain: "V2EX", code: 403, userInfo: [NSLocalizedDescriptionKey: "Posting not supported yet."])
+        // Step 1: Fetch the topic page to get the CSRF `once` token
+        let topicURL = URL(string: "\(baseURL)/t/\(topicId)")!
+        var getRequest = URLRequest(url: topicURL)
+        getRequest.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36", forHTTPHeaderField: "User-Agent")
+        
+        // Attach stored cookies
+        let cookies = DatabaseManager.shared.getCookies(siteId: id) ?? []
+        if !cookies.isEmpty {
+            let cookieHeader = cookies.map { "\($0.name)=\($0.value)" }.joined(separator: "; ")
+            getRequest.setValue(cookieHeader, forHTTPHeaderField: "Cookie")
+            getRequest.httpShouldHandleCookies = false
+        }
+        
+        let (pageData, pageResponse) = try await URLSession.shared.data(for: getRequest)
+        let pageHTML = String(decoding: pageData, as: UTF8.self)
+        
+        if let httpResp = pageResponse as? HTTPURLResponse {
+            print("[V2EX] Topic page status: \(httpResp.statusCode), HTML length: \(pageHTML.count)")
+        }
+        
+        // Debug: check if we're logged in (logged-in pages have /signout or /settings)
+        let isLoggedIn = pageHTML.contains("/signout") || pageHTML.contains("/settings")
+        print("[V2EX] Page appears logged in: \(isLoggedIn)")
+        
+        // Try multiple patterns for the `once` token
+        var onceToken: String?
+        let range = NSRange(pageHTML.startIndex..., in: pageHTML)
+        
+        // Pattern 1: name="once" value="12345"
+        let patterns = [
+            "name=\"once\"[^>]*value=\"(\\d+)\"",           // name first, then value
+            "value=\"(\\d+)\"[^>]*name=\"once\"",            // value first, then name
+            "var\\s+once\\s*=\\s*\"?(\\d+)\"?",              // JavaScript var once = 12345
+            "'once'\\s*:\\s*'?(\\d+)'?",                     // JS object: 'once': '12345'
+            "once=(\\d+)",                                    // URL query param once=12345
+        ]
+        
+        for (i, pattern) in patterns.enumerated() {
+            if let regex = try? NSRegularExpression(pattern: pattern),
+               let match = regex.firstMatch(in: pageHTML, options: [], range: range),
+               let r = Range(match.range(at: 1), in: pageHTML) {
+                onceToken = String(pageHTML[r])
+                print("[V2EX] Found once token via pattern #\(i): \(onceToken!)")
+                break
+            }
+        }
+        
+        // If still not found, log a snippet of the reply form area
+        if onceToken == nil {
+            if let formRange = pageHTML.range(of: "reply_content") {
+                let start = pageHTML.index(formRange.lowerBound, offsetBy: -200, limitedBy: pageHTML.startIndex) ?? pageHTML.startIndex
+                let end = pageHTML.index(formRange.upperBound, offsetBy: 500, limitedBy: pageHTML.endIndex) ?? pageHTML.endIndex
+                print("[V2EX] Reply form area: \(pageHTML[start..<end])")
+            } else {
+                print("[V2EX] No reply_content found in page. Page snippet (last 500 chars): \(String(pageHTML.suffix(500)))")
+            }
+        }
+        
+        guard let once = onceToken else {
+            print("[V2EX] Failed to find 'once' CSRF token. User may not be logged in.")
+            throw NSError(domain: "V2EX", code: 403, userInfo: [NSLocalizedDescriptionKey: "Not logged in or CSRF token not found. Please log in first."])
+        }
+        
+        print("[V2EX] Found once token: \(once)")
+        
+        // Step 2: POST the reply
+        var postRequest = URLRequest(url: topicURL)
+        postRequest.httpMethod = "POST"
+        postRequest.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36", forHTTPHeaderField: "User-Agent")
+        postRequest.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+        postRequest.setValue(topicURL.absoluteString, forHTTPHeaderField: "Referer")
+        
+        if !cookies.isEmpty {
+            let cookieHeader = cookies.map { "\($0.name)=\($0.value)" }.joined(separator: "; ")
+            postRequest.setValue(cookieHeader, forHTTPHeaderField: "Cookie")
+            postRequest.httpShouldHandleCookies = false
+        }
+        
+        let body = "content=\(content.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? content)&once=\(once)"
+        postRequest.httpBody = body.data(using: .utf8)
+        
+        let (_, postResponse) = try await URLSession.shared.data(for: postRequest)
+        
+        if let httpResponse = postResponse as? HTTPURLResponse {
+            print("[V2EX] Post reply response status: \(httpResponse.statusCode)")
+            if httpResponse.statusCode == 302 || httpResponse.statusCode == 200 {
+                print("[V2EX] Reply posted successfully")
+            } else {
+                throw NSError(domain: "V2EX", code: httpResponse.statusCode, userInfo: [NSLocalizedDescriptionKey: "Failed to post reply (HTTP \(httpResponse.statusCode))"])
+            }
+        }
     }
     
     func createThread(categoryId: String, title: String, content: String) async throws {

@@ -15,6 +15,17 @@ struct SiteLoginConfig {
         let icon: String      // SF Symbol name
         let loginPath: String  // Path appended to base URL
     }
+    
+    // Optional check: success only if this cookie is present
+    let requiredCookieName: String?
+    
+    init(site: ForumSite, loginURL: String, successURLPatterns: [String], oauthOptions: [OAuthOption], requiredCookieName: String? = nil) {
+        self.site = site
+        self.loginURL = loginURL
+        self.successURLPatterns = successURLPatterns
+        self.oauthOptions = oauthOptions
+        self.requiredCookieName = requiredCookieName
+    }
 }
 
 extension SiteLoginConfig {
@@ -63,6 +74,16 @@ extension SiteLoginConfig {
                     .init(name: "Apple", icon: "apple.logo", loginPath: "https://linux.do/auth/apple"),
                     .init(name: "Passkey", icon: "person.badge.key.fill", loginPath: "https://linux.do/session/passkey/challenge"),
                 ]
+            )
+            
+        case .zhihu:
+            return SiteLoginConfig(
+                site: .zhihu,
+                loginURL: "https://www.zhihu.com/signin",
+                // Re-adding generic patterns but relying on requiredCookieName for safety
+                successURLPatterns: ["zhihu.com/hot", "zhihu.com/follow", "zhihu.com/people", "zhihu.com/?tab", "zhihu.com/question", "www.zhihu.com", "zhihu.com"],
+                oauthOptions: [],
+                requiredCookieName: "z_c0"  // Critical for Zhihu auth
             )
         }
     }
@@ -119,11 +140,27 @@ struct WebLoginView: UIViewRepresentable {
             }
             
             if isSuccess {
-                // Extract all cookies from the web view
-                webView.configuration.websiteDataStore.httpCookieStore.getAllCookies { cookies in
-                    DispatchQueue.main.async {
-                        self.onLoginSuccess(cookies)
+                checkCookiesWithRetry(webView: webView, retries: 5)
+            }
+        }
+        
+        func checkCookiesWithRetry(webView: WKWebView, retries: Int) {
+            webView.configuration.websiteDataStore.httpCookieStore.getAllCookies { cookies in
+                // If a required cookie is specified, verify it exists
+                if let requiredName = self.config.requiredCookieName {
+                    guard cookies.contains(where: { $0.name == requiredName }) else {
+                        print("[WebLogin] Matched success URL but '\(requiredName)' missing. Retries left: \(retries)")
+                        if retries > 0 {
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                                self.checkCookiesWithRetry(webView: webView, retries: retries - 1)
+                            }
+                        }
+                        return
                     }
+                }
+                
+                DispatchQueue.main.async {
+                    self.onLoginSuccess(cookies)
                 }
             }
         }

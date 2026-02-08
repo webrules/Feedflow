@@ -133,6 +133,11 @@ class ThreadListViewModel: ObservableObject {
         self.isAtTop = isAtTop
     }
     
+    /// Remove a thread from the displayed list (e.g., after downvoting)
+    func removeThread(_ thread: Thread) {
+        threads.removeAll { $0.id == thread.id }
+    }
+    
     func prefetchThread(thread: Thread) {
         // Allow prefetch for all sites.
         // guard service.id == "4d4y" else { return }

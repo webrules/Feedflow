@@ -35,3 +35,18 @@ extension Color {
     static let forumTextSecondary = Color(UIColor { $0.userInterfaceStyle == .dark ? UIColor(hex: "949BA5") : UIColor.secondaryLabel })
     static let forumInputBackground = Color(UIColor { $0.userInterfaceStyle == .dark ? UIColor(hex: "1C2436") : UIColor(hex: "E5E5EA") })
 }
+
+// MARK: - Conditional View Modifier
+
+extension View {
+    /// Conditionally applies a view modifier.
+    /// Usage: `.if(condition) { view in view.someModifier() }`
+    @ViewBuilder
+    func `if`<Content: View>(_ condition: Bool, transform: (Self) -> Content) -> some View {
+        if condition {
+            transform(self)
+        } else {
+            self
+        }
+    }
+}
