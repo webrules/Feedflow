@@ -110,6 +110,20 @@ class LocalizationManager: ObservableObject {
             "failed_load_image": ["en": "Failed to load image", "zh": "图片加载失败"],
             "rotate_left": ["en": "Left", "zh": "左转"],
             "rotate_right": ["en": "Right", "zh": "右转"],
+            
+            // Login (extended)
+            "login_with_browser": ["en": "Sign In via Browser", "zh": "通过浏览器登录"],
+            "login_to_site": ["en": "Sign in to", "zh": "登录"],
+            "login_captcha_support": ["en": "Supports captcha & 2FA verification", "zh": "支持验证码和双重验证"],
+            "login_or": ["en": "or", "zh": "或"],
+            "login_with_provider": ["en": "Quick Sign In", "zh": "快捷登录"],
+            "login_success": ["en": "Login Successful!", "zh": "登录成功！"],
+            "login_web_note": ["en": "You will be redirected to the website to sign in. Your session cookies are saved locally for future use.", "zh": "您将被重定向到网站进行登录。您的会话 Cookie 将保存在本地以供后续使用。"],
+            
+            // In-App Browser & URL Bookmarks
+            "browser": ["en": "Browser", "zh": "浏览器"],
+            "thread_bookmarks": ["en": "Posts", "zh": "帖子"],
+            "url_bookmarks": ["en": "Web Pages", "zh": "网页"],
         ]
         
         if let languageDict = translations[key],

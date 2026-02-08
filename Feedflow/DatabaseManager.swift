@@ -12,6 +12,7 @@ class DatabaseManager {
         createSummariesTable()
         createCacheTables()
         createBookmarksTable()
+        createURLBookmarksTable()
     }
     
     private func openDatabase() {
@@ -134,11 +135,16 @@ class DatabaseManager {
         let sql = "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?);"
         var statement: OpaquePointer?
         if sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK {
-            sqlite3_bind_text(statement, 1, (key as NSString).utf8String, -1, nil)
-            sqlite3_bind_text(statement, 2, (value as NSString).utf8String, -1, nil)
+            // Use SQLITE_TRANSIENT to ensure SQLite copies the string data
+            // before the temporary NSString is deallocated
+            let SQLITE_TRANSIENT = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+            sqlite3_bind_text(statement, 1, (key as NSString).utf8String, -1, SQLITE_TRANSIENT)
+            sqlite3_bind_text(statement, 2, (value as NSString).utf8String, -1, SQLITE_TRANSIENT)
             if sqlite3_step(statement) != SQLITE_DONE {
-                print("Error saving setting: \(key)")
+                print("[DB] Error saving setting: \(key)")
             }
+        } else {
+            print("[DB] Error preparing save statement for key: \(key)")
         }
         sqlite3_finalize(statement)
     }
@@ -149,7 +155,8 @@ class DatabaseManager {
         var result: String?
         
         if sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK {
-            sqlite3_bind_text(statement, 1, (key as NSString).utf8String, -1, nil)
+            let SQLITE_TRANSIENT = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+            sqlite3_bind_text(statement, 1, (key as NSString).utf8String, -1, SQLITE_TRANSIENT)
             if sqlite3_step(statement) == SQLITE_ROW {
                 if let val = sqlite3_column_text(statement, 0) {
                     result = String(cString: val)
@@ -161,12 +168,15 @@ class DatabaseManager {
     }
     
     // MARK: - Cookie Storage (encrypted)
+    
+    /// Save cookies with merge — merges new cookies into existing ones (for incremental updates)
     func saveCookies(siteId: String, cookies: [HTTPCookie]) {
-        // Load existing cookies first to merge
+        print("[DB] saveCookies (merge) called for \(siteId) with \(cookies.count) new cookies")
+        
         var currentCookies = getCookies(siteId: siteId) ?? []
+        print("[DB] Existing cookies for \(siteId): \(currentCookies.count)")
         
         for newCookie in cookies {
-            // Replace existing cookie with same name/domain/path
             if let index = currentCookies.firstIndex(where: { 
                 $0.name == newCookie.name && $0.domain == newCookie.domain && $0.path == newCookie.path 
             }) {
@@ -176,8 +186,19 @@ class DatabaseManager {
             }
         }
         
-        // Encode cookies to a simple dictionary array
-        let cookieDicts = currentCookies.map { cookie -> [String: Any] in
+        print("[DB] Merged cookie count for \(siteId): \(currentCookies.count)")
+        persistCookies(siteId: siteId, cookies: currentCookies)
+    }
+    
+    /// Replace cookies entirely — overwrites all existing cookies (for fresh login)
+    func replaceCookies(siteId: String, cookies: [HTTPCookie]) {
+        print("[DB] replaceCookies called for \(siteId) with \(cookies.count) cookies (clean overwrite)")
+        persistCookies(siteId: siteId, cookies: cookies)
+    }
+    
+    /// Internal: serialize and persist cookies to DB
+    private func persistCookies(siteId: String, cookies: [HTTPCookie]) {
+        let cookieDicts = cookies.map { cookie -> [String: Any] in
             var dict: [String: Any] = [
                 "name": cookie.name,
                 "value": cookie.value,
@@ -191,20 +212,49 @@ class DatabaseManager {
             }
             return dict
         }
-        if let jsonData = try? JSONSerialization.data(withJSONObject: cookieDicts, options: []),
-           let jsonString = String(data: jsonData, encoding: .utf8),
-           let encrypted = EncryptionHelper.shared.encrypt(jsonString) {
-            saveSetting(key: "login_\(siteId)_cookies", value: encrypted)
+        
+        guard let jsonData = try? JSONSerialization.data(withJSONObject: cookieDicts, options: []) else {
+            print("[DB] ERROR: Failed to serialize cookies to JSON for \(siteId)")
+            return
+        }
+        guard let jsonString = String(data: jsonData, encoding: .utf8) else {
+            print("[DB] ERROR: Failed to convert cookie JSON data to string for \(siteId)")
+            return
+        }
+        guard let encrypted = EncryptionHelper.shared.encrypt(jsonString) else {
+            print("[DB] ERROR: Failed to encrypt cookies for \(siteId)")
+            return
+        }
+        
+        print("[DB] Saving \(cookies.count) cookies for \(siteId) (\(encrypted.count) chars)")
+        saveSetting(key: "login_\(siteId)_cookies", value: encrypted)
+        
+        // Verify the save worked
+        if let verify = getSetting(key: "login_\(siteId)_cookies") {
+            print("[DB] Verified: cookie data saved for \(siteId) (\(verify.count) chars)")
+        } else {
+            print("[DB] CRITICAL: Cookie save verification FAILED for \(siteId)!")
         }
     }
     
     func getCookies(siteId: String) -> [HTTPCookie]? {
-        guard let encrypted = getSetting(key: "login_\(siteId)_cookies"),
-              let jsonString = EncryptionHelper.shared.decrypt(encrypted),
-              let jsonData = jsonString.data(using: .utf8),
-              let array = try? JSONSerialization.jsonObject(with: jsonData, options: []) as? [[String: Any]] else {
+        guard let encrypted = getSetting(key: "login_\(siteId)_cookies") else {
+            print("[DB] getCookies: No stored data for \(siteId)")
             return nil
         }
+        guard let jsonString = EncryptionHelper.shared.decrypt(encrypted) else {
+            print("[DB] getCookies: Decryption FAILED for \(siteId)")
+            return nil
+        }
+        guard let jsonData = jsonString.data(using: .utf8) else {
+            print("[DB] getCookies: String to data conversion failed for \(siteId)")
+            return nil
+        }
+        guard let array = try? JSONSerialization.jsonObject(with: jsonData, options: []) as? [[String: Any]] else {
+            print("[DB] getCookies: JSON parse failed for \(siteId)")
+            return nil
+        }
+        
         var cookies: [HTTPCookie] = []
         for dict in array {
             var properties: [HTTPCookiePropertyKey: Any] = [:]
@@ -212,20 +262,27 @@ class DatabaseManager {
             if let value = dict["value"] as? String { properties[.value] = value }
             if let domain = dict["domain"] as? String { properties[.domain] = domain }
             if let path = dict["path"] as? String { properties[.path] = path }
-            if let secure = dict["secure"] as? Bool { properties[.secure] = secure }
-            if let httpOnly = dict["httpOnly"] as? Bool { properties[.init("HttpOnly")] = httpOnly }
+            if let secure = dict["secure"] as? Bool, secure { properties[.secure] = "TRUE" }
             if let expires = dict["expires"] as? TimeInterval {
                 properties[.expires] = Date(timeIntervalSince1970: expires)
             }
             if let cookie = HTTPCookie(properties: properties) {
-                // Only return cookies that haven't expired
+                // Only skip cookies that have explicitly expired
                 if let expires = cookie.expiresDate, expires < Date() {
+                    print("[DB] Skipping expired cookie: \(cookie.name) (expired \(expires))")
                     continue
                 }
                 cookies.append(cookie)
+            } else {
+                print("[DB] Failed to create HTTPCookie from dict: \(dict["name"] ?? "unknown")")
             }
         }
+        print("[DB] getCookies for \(siteId): \(array.count) stored, \(cookies.count) valid")
         return cookies
+    }
+    
+    func hasCookies(siteId: String) -> Bool {
+        return getSetting(key: "login_\(siteId)_cookies") != nil
     }
     
     // MARK: - AI Summaries
@@ -480,6 +537,76 @@ class DatabaseManager {
                     if let thread = try? JSONDecoder().decode(Thread.self, from: jsonData) {
                         results.append((thread, serviceId))
                     }
+                }
+            }
+        }
+        sqlite3_finalize(statement)
+        return results
+    }
+    
+    // MARK: - URL Bookmarks
+    
+    private func createURLBookmarksTable() {
+        let sql = """
+        CREATE TABLE IF NOT EXISTS url_bookmarks(
+            url TEXT PRIMARY KEY,
+            title TEXT,
+            timestamp INTEGER
+        );
+        """
+        var statement: OpaquePointer?
+        if sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK {
+            sqlite3_step(statement)
+        }
+        sqlite3_finalize(statement)
+    }
+    
+    func saveURLBookmark(url: String, title: String) {
+        let sql = "INSERT OR REPLACE INTO url_bookmarks (url, title, timestamp) VALUES (?, ?, ?);"
+        var statement: OpaquePointer?
+        if sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK {
+            sqlite3_bind_text(statement, 1, (url as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(statement, 2, (title as NSString).utf8String, -1, nil)
+            sqlite3_bind_int64(statement, 3, Int64(Date().timeIntervalSince1970))
+            sqlite3_step(statement)
+        }
+        sqlite3_finalize(statement)
+    }
+    
+    func removeURLBookmark(url: String) {
+        let sql = "DELETE FROM url_bookmarks WHERE url = ?;"
+        var statement: OpaquePointer?
+        if sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK {
+            sqlite3_bind_text(statement, 1, (url as NSString).utf8String, -1, nil)
+            sqlite3_step(statement)
+        }
+        sqlite3_finalize(statement)
+    }
+    
+    func isURLBookmarked(url: String) -> Bool {
+        let sql = "SELECT 1 FROM url_bookmarks WHERE url = ?;"
+        var statement: OpaquePointer?
+        var exists = false
+        if sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK {
+            sqlite3_bind_text(statement, 1, (url as NSString).utf8String, -1, nil)
+            if sqlite3_step(statement) == SQLITE_ROW { exists = true }
+        }
+        sqlite3_finalize(statement)
+        return exists
+    }
+    
+    func getURLBookmarks() -> [(String, String, Date)] {
+        let sql = "SELECT url, title, timestamp FROM url_bookmarks ORDER BY timestamp DESC;"
+        var statement: OpaquePointer?
+        var results: [(String, String, Date)] = []
+        if sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK {
+            while sqlite3_step(statement) == SQLITE_ROW {
+                if let urlPtr = sqlite3_column_text(statement, 0),
+                   let titlePtr = sqlite3_column_text(statement, 1) {
+                    let url = String(cString: urlPtr)
+                    let title = String(cString: titlePtr)
+                    let timestamp = Date(timeIntervalSince1970: TimeInterval(sqlite3_column_int64(statement, 2)))
+                    results.append((url, title, timestamp))
                 }
             }
         }

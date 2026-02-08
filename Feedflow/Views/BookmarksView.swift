@@ -3,13 +3,14 @@ import SwiftUI
 struct BookmarksView: View {
     @StateObject private var viewModel = BookmarksViewModel()
     @Environment(\.dismiss) var dismiss
+    @ObservedObject var localizationManager = LocalizationManager.shared
     
     var body: some View {
         NavigationStack {
             ZStack {
                 Color.forumBackground.ignoresSafeArea()
                 
-                if viewModel.bookmarkedThreads.isEmpty {
+                if viewModel.bookmarkedThreads.isEmpty && viewModel.urlBookmarks.isEmpty {
                     VStack {
                         Image(systemName: "bookmark.slash")
                             .font(.system(size: 64))
@@ -21,11 +22,27 @@ struct BookmarksView: View {
                 } else {
                     ScrollView {
                         LazyVStack(spacing: 12) {
-                            ForEach(viewModel.bookmarkedThreads, id: \.0.id) { thread, serviceId in
-                                NavigationLink(destination: ThreadDetailView(thread: thread, service: viewModel.getService(for: serviceId))) {
-                                    BookmarkRow(thread: thread, serviceName: viewModel.getService(for: serviceId).name)
+                            // Thread bookmarks
+                            if !viewModel.bookmarkedThreads.isEmpty {
+                                SectionHeader(title: "thread_bookmarks".localized())
+                                
+                                ForEach(viewModel.bookmarkedThreads, id: \.0.id) { thread, serviceId in
+                                    NavigationLink(destination: ThreadDetailView(thread: thread, service: viewModel.getService(for: serviceId))) {
+                                        BookmarkRow(thread: thread, serviceName: viewModel.getService(for: serviceId).name)
+                                    }
+                                    .buttonStyle(PlainButtonStyle())
                                 }
-                                .buttonStyle(PlainButtonStyle())
+                            }
+                            
+                            // URL bookmarks
+                            if !viewModel.urlBookmarks.isEmpty {
+                                SectionHeader(title: "url_bookmarks".localized())
+                                
+                                ForEach(viewModel.urlBookmarks, id: \.0) { url, title, date in
+                                    URLBookmarkRow(url: url, title: title, date: date) {
+                                        viewModel.removeURLBookmark(url: url)
+                                    }
+                                }
                             }
                         }
                         .padding()
@@ -44,6 +61,20 @@ struct BookmarksView: View {
                 viewModel.loadBookmarks()
             }
         }
+    }
+}
+
+struct SectionHeader: View {
+    let title: String
+    var body: some View {
+        HStack {
+            Text(title)
+                .font(.caption)
+                .foregroundColor(.forumTextSecondary)
+                .textCase(.uppercase)
+            Spacer()
+        }
+        .padding(.top, 8)
     }
 }
 
@@ -98,5 +129,70 @@ struct BookmarkRow: View {
             RoundedRectangle(cornerRadius: 12)
                 .stroke(Color.gray.opacity(0.1), lineWidth: 1)
         )
+    }
+}
+
+struct URLBookmarkRow: View {
+    let url: String
+    let title: String
+    let date: Date
+    let onDelete: () -> Void
+    @State private var showBrowser = false
+    
+    var body: some View {
+        Button(action: { showBrowser = true }) {
+            HStack(spacing: 12) {
+                Image(systemName: "globe")
+                    .font(.system(size: 20))
+                    .foregroundColor(.forumAccent)
+                    .frame(width: 36, height: 36)
+                    .background(Color.forumAccent.opacity(0.1))
+                    .cornerRadius(8)
+                
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(title)
+                        .font(.subheadline)
+                        .fontWeight(.medium)
+                        .foregroundColor(.forumTextPrimary)
+                        .lineLimit(2)
+                        .multilineTextAlignment(.leading)
+                    
+                    Text(url)
+                        .font(.caption2)
+                        .foregroundColor(.forumTextSecondary)
+                        .lineLimit(1)
+                }
+                
+                Spacer()
+                
+                Text(timeAgo(from: date))
+                    .font(.caption2)
+                    .foregroundColor(.forumTextSecondary)
+            }
+            .padding()
+            .background(Color.forumCard)
+            .cornerRadius(12)
+            .overlay(
+                RoundedRectangle(cornerRadius: 12)
+                    .stroke(Color.gray.opacity(0.1), lineWidth: 1)
+            )
+        }
+        .buttonStyle(.plain)
+        .contextMenu {
+            Button(role: .destructive, action: onDelete) {
+                Label("delete".localized(), systemImage: "trash")
+            }
+        }
+        .fullScreenCover(isPresented: $showBrowser) {
+            InAppBrowserView(url: url, pageTitle: title)
+        }
+    }
+    
+    private func timeAgo(from date: Date) -> String {
+        let diff = Date().timeIntervalSince(date)
+        if diff < 60 { return "just now" }
+        else if diff < 3600 { return "\(Int(diff / 60))m" }
+        else if diff < 86400 { return "\(Int(diff / 3600))h" }
+        else { return "\(Int(diff / 86400))d" }
     }
 }

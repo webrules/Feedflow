@@ -197,7 +197,7 @@ struct SiteListView: View {
                         Button(action: {
                             themeManager.isDarkMode.toggle()
                         }) {
-                            Image(systemName: themeManager.isDarkMode ? "sun.max.fill" : "moon.fill")
+                            Image(systemName: themeManager.isDarkMode ? "moon.fill" : "sun.max.fill")
                                 .foregroundColor(.forumTextPrimary)
                         }
                         

@@ -67,26 +67,44 @@ class FourD4YService: ForumService {
     
     private func syncCookiesToSystem() {
         let saved = DatabaseManager.shared.getCookies(siteId: id) ?? []
-        for cookie in saved {
+        // Only sync cookies that actually belong to 4d4y domain
+        let relevant = saved.filter { $0.domain.contains("4d4y.com") }
+        if relevant.isEmpty {
+            print("[4D4Y] WARNING: No 4d4y cookies found in DB for site '\(id)'. User may not be logged in.")
+        } else {
+            let names = relevant.map { "\($0.name)(\($0.domain))" }.joined(separator: ", ")
+            print("[4D4Y] Syncing \(relevant.count) cookies to system: \(names)")
+        }
+        for cookie in relevant {
             HTTPCookieStorage.shared.setCookie(cookie)
         }
-        print("[4D4Y] Synced \(saved.count) persistent cookies to system storage.")
     }
+
     
     private func loadSavedCookies() -> [HTTPCookie] {
         return DatabaseManager.shared.getCookies(siteId: id) ?? []
     }
     
     private func fetchContent(url: URL) async throws -> String {
-        // Ensure system storage has our saved cookies (once per session)
-        syncCookiesToSystem()
+        // Load saved cookies directly from DB
+        let savedCookies = DatabaseManager.shared.getCookies(siteId: id) ?? []
+        let relevant = savedCookies.filter { $0.domain.contains("4d4y.com") }
         
         var request = URLRequest(url: url)
         request.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36", forHTTPHeaderField: "User-Agent")
         
-        // URLSession.shared.data(for:) automatically handles HTTPCookieStorage.shared
+        // Manually set cookies in the request header to guarantee they're sent
+        // (HTTPCookieStorage automatic handling can silently drop cookies)
+        if !relevant.isEmpty {
+            let cookieHeader = relevant.map { "\($0.name)=\($0.value)" }.joined(separator: "; ")
+            request.setValue(cookieHeader, forHTTPHeaderField: "Cookie")
+            request.httpShouldHandleCookies = false  // Don't let URLSession override our manual cookies
+            print("[4D4Y] Sending \(relevant.count) cookies manually: \(relevant.map { $0.name }.joined(separator: ", "))")
+        }
+        
         let (data, _) = try await URLSession.shared.data(for: request)
         
+
         // Try GBK decode first
         var html = ""
         if let decoded = String(data: data, encoding: gbkEncoding) {
@@ -110,15 +128,15 @@ class FourD4YService: ForumService {
                     self.currentSID = String(html[r])
                     print("[4D4Y] Extracted SID: \(self.currentSID!)")
                     
-                    // Create/Update the cdb_sid cookie to persist the latest value
+                    // Set SID cookie on in-memory session only (don't persist to DB to avoid overwriting login cookies)
                     if let sidCookie = HTTPCookie(properties: [
                         .name: "cdb_sid",
                         .value: self.currentSID!,
                         .domain: "www.4d4y.com",
                         .path: "/forum",
-                        .expires: Date().addingTimeInterval(86400) // 1 day session
+                        .expires: Date().addingTimeInterval(86400)
                     ]) {
-                        DatabaseManager.shared.saveCookies(siteId: id, cookies: [sidCookie])
+                        HTTPCookieStorage.shared.setCookie(sidCookie)
                     }
                 }
             }
@@ -686,8 +704,8 @@ class FourD4YService: ForumService {
                    let fullMatchRange = Range(match.range, in: processed) {
                     let src = String(processed[srcRange])
                     
-                    // Exclude smilies/emojis from being turned into big block images
-                    if src.contains("smilies") || src.contains("images/default") || src.contains("images/common") {
+                    // Exclude smilies/emojis and UI images from being turned into big block images
+                    if src.contains("smilies") || src.contains("images/default") || src.contains("images/common") || src.contains("common/back.gif") {
                          // Attempt to replace with a generic emoji if possible, or just remove to avoid giant block
                          // Ideally we map these, but for now removing avoids the UI bug.
                          processed.replaceSubrange(fullMatchRange, with: "")
@@ -705,6 +723,34 @@ class FourD4YService: ForumService {
         processed = processed.replacingOccurrences(of: "<br />", with: "\n")
         processed = processed.replacingOccurrences(of: "<br>", with: "\n")
         processed = processed.replacingOccurrences(of: "</p>", with: "\n\n")
+        
+        // 2.5. Extract links (<a href="...">) before stripping tags
+        // Preserve as [LINK:url|title] so LinkedTextView can render titled links
+        do {
+            let linkRegex = try NSRegularExpression(
+                pattern: "<a[^>]+href=\"([^\"]+)\"[^>]*>(.*?)</a>",
+                options: [.caseInsensitive, .dotMatchesLineSeparators]
+            )
+            let linkMatches = linkRegex.matches(in: processed, range: NSRange(processed.startIndex..., in: processed))
+            
+            for match in linkMatches.reversed() {
+                if let hrefRange = Range(match.range(at: 1), in: processed),
+                   let textRange = Range(match.range(at: 2), in: processed),
+                   let fullRange = Range(match.range, in: processed) {
+                    let href = String(processed[hrefRange])
+                    let linkText = String(processed[textRange])
+                        .replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                    
+                    if href.hasPrefix("#") || href.hasPrefix("javascript:") || href.contains("images/common") { continue }
+                    
+                    let title = linkText.isEmpty ? href : linkText
+                    processed.replaceSubrange(fullRange, with: "[LINK:\(href)|\(title)]")
+                }
+            }
+        } catch {
+            print("Regex error (links): \(error)")
+        }
         
         // 3. Strip remaining HTML tags
         processed = processed.replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression, range: nil)

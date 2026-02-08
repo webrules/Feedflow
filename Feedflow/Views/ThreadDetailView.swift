@@ -39,22 +39,24 @@ struct ThreadDetailView: View {
                             .frame(height: 0)
                             
                             VStack(alignment: .leading, spacing: 12) {
-                                // Header
-                                HStack {
-                                    AvatarView(urlOrName: viewModel.thread.author.avatar, size: 40)
-                                    
-                                    VStack(alignment: .leading) {
-                                        Text(viewModel.thread.author.username)
-                                            .font(.headline)
-                                            .foregroundColor(.forumTextPrimary)
-                                        if let role = viewModel.thread.author.role {
-                                            TagView(text: role)
+                                // Header (hidden for RSS)
+                                if !isRSSFeed {
+                                    HStack {
+                                        AvatarView(urlOrName: viewModel.thread.author.avatar, size: 40)
+                                        
+                                        VStack(alignment: .leading) {
+                                            Text(viewModel.thread.author.username)
+                                                .font(.headline)
+                                                .foregroundColor(.forumTextPrimary)
+                                            if let role = viewModel.thread.author.role {
+                                                TagView(text: role)
+                                            }
                                         }
+                                        
+                                        Spacer()
                                     }
-                                    
-                                    Spacer()
                                 }
-                                .id("thread_top")
+                                Color.clear.frame(height: 0).id("thread_top")
                                 
                                 // Content
                                 Text(viewModel.thread.title)
@@ -65,8 +67,8 @@ struct ThreadDetailView: View {
                                 // Parsed Content (Text + Images)
                                 ParsedContentView(text: viewModel.thread.content)
                                 
-                                // Tags
-                                if let tags = viewModel.thread.tags, !tags.isEmpty {
+                                // Tags (hidden for RSS)
+                                if !isRSSFeed, let tags = viewModel.thread.tags, !tags.isEmpty {
                                     ScrollView(.horizontal, showsIndicators: false) {
                                         HStack {
                                             ForEach(tags, id: \.self) { tag in
@@ -296,6 +298,181 @@ struct ThreadDetailView: View {
     }
 }
 
+// MARK: - Linked Text (makes URLs tappable)
+
+struct LinkedTextView: View {
+    let text: String
+    @State private var selectedURL: String? = nil
+    
+    var body: some View {
+        let segments = parseSegments(from: text)
+        
+        // Check if it's a single link or single URL
+        let linkSegments = segments.filter { if case .link = $0 { return true }; if case .url = $0 { return true }; return false }
+        let plainSegments = segments.filter { if case .plain(let t) = $0 { return !t.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }; return false }
+        
+        if linkSegments.count == 1 && plainSegments.isEmpty {
+            // Single link — show as prominent card
+            let (url, title): (String, String) = {
+                switch linkSegments[0] {
+                case .link(let u, let t): return (u, t)
+                case .url(let u, let t): return (u, t)
+                default: return ("", "")
+                }
+            }()
+            
+            Button(action: { selectedURL = url }) {
+                HStack(spacing: 8) {
+                    Image(systemName: "link")
+                        .font(.system(size: 14))
+                    Text(title)
+                        .font(.body)
+                        .lineLimit(2)
+                        .multilineTextAlignment(.leading)
+                }
+                .foregroundColor(.forumAccent)
+                .padding(12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color.forumAccent.opacity(0.08))
+                .cornerRadius(10)
+            }
+            .buttonStyle(.plain)
+            .fullScreenCover(item: Binding<URLItem?>(
+                get: { selectedURL.map { URLItem(url: $0) } },
+                set: { selectedURL = $0?.url }
+            )) { item in
+                InAppBrowserView(url: item.url)
+            }
+        } else {
+            // Mixed content — inline text with tappable links
+            VStack(alignment: .leading, spacing: 4) {
+                let textContent = segments.reduce(Text("")) { result, segment in
+                    switch segment {
+                    case .plain(let content):
+                        return result + Text(content)
+                            .font(.body)
+                            .foregroundColor(.forumTextPrimary.opacity(0.9))
+                    case .link(let urlString, let displayText):
+                        return result + Text(.init("[\(displayText)](\(urlString))"))
+                            .font(.body)
+                            .foregroundColor(.forumAccent)
+                    case .url(let urlString, let displayText):
+                        return result + Text(.init("[\(displayText)](\(urlString))"))
+                            .font(.body)
+                            .foregroundColor(.forumAccent)
+                    }
+                }
+                textContent
+                    .lineSpacing(6)
+                    .tint(.forumAccent)
+                    .environment(\.openURL, OpenURLAction { url in
+                        selectedURL = url.absoluteString
+                        return .handled
+                    })
+            }
+            .fullScreenCover(item: Binding<URLItem?>(
+                get: { selectedURL.map { URLItem(url: $0) } },
+                set: { selectedURL = $0?.url }
+            )) { item in
+                InAppBrowserView(url: item.url)
+            }
+        }
+    }
+    
+    struct URLItem: Identifiable {
+        let id = UUID()
+        let url: String
+    }
+    
+    enum TextSegment {
+        case plain(String)
+        case link(String, String)   // (url, title) from [LINK:url|title]
+        case url(String, String)    // (url, displayText) from raw URL detection
+    }
+    
+    /// Parse [LINK:url|title] markers first, then detect raw URLs in remaining text
+    private func parseSegments(from text: String) -> [TextSegment] {
+        var segments: [TextSegment] = []
+        
+        // Step 1: Split on [LINK:url|title] markers
+        let linkPattern = "\\[LINK:([^|\\]]+)\\|([^\\]]+)\\]"
+        guard let linkRegex = try? NSRegularExpression(pattern: linkPattern, options: []) else {
+            return detectRawURLs(in: text)
+        }
+        
+        let nsText = text as NSString
+        let fullRange = NSRange(location: 0, length: nsText.length)
+        let matches = linkRegex.matches(in: text, range: fullRange)
+        
+        var lastEnd = 0
+        
+        for match in matches {
+            // Plain text before this [LINK:]
+            if match.range.location > lastEnd {
+                let beforeRange = NSRange(location: lastEnd, length: match.range.location - lastEnd)
+                let before = nsText.substring(with: beforeRange)
+                // Detect raw URLs in the plain text portion
+                segments.append(contentsOf: detectRawURLs(in: before))
+            }
+            
+            // Extract url and title
+            if let urlRange = Range(match.range(at: 1), in: text),
+               let titleRange = Range(match.range(at: 2), in: text) {
+                let url = String(text[urlRange])
+                let title = String(text[titleRange])
+                segments.append(.link(url, title))
+            }
+            
+            lastEnd = match.range.location + match.range.length
+        }
+        
+        // Remaining text after last [LINK:]
+        if lastEnd < nsText.length {
+            let remaining = nsText.substring(from: lastEnd)
+            segments.append(contentsOf: detectRawURLs(in: remaining))
+        }
+        
+        return segments.isEmpty ? [.plain(text)] : segments
+    }
+    
+    /// Detect raw URLs (http/https) in plain text using NSDataDetector
+    private func detectRawURLs(in text: String) -> [TextSegment] {
+        let trimmed = text
+        if trimmed.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return trimmed.isEmpty ? [] : [.plain(trimmed)]
+        }
+        
+        guard let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue) else {
+            return [.plain(trimmed)]
+        }
+        
+        var segments: [TextSegment] = []
+        let nsText = trimmed as NSString
+        let range = NSRange(location: 0, length: nsText.length)
+        let matches = detector.matches(in: trimmed, range: range)
+        
+        var lastEnd = 0
+        
+        for match in matches {
+            if match.range.location > lastEnd {
+                let plainRange = NSRange(location: lastEnd, length: match.range.location - lastEnd)
+                segments.append(.plain(nsText.substring(with: plainRange)))
+            }
+            
+            let urlString = nsText.substring(with: match.range)
+            segments.append(.url(urlString, urlString))
+            
+            lastEnd = match.range.location + match.range.length
+        }
+        
+        if lastEnd < nsText.length {
+            segments.append(.plain(nsText.substring(from: lastEnd)))
+        }
+        
+        return segments.isEmpty ? [.plain(trimmed)] : segments
+    }
+}
+
 struct ParsedContentView: View {
     let text: String
     @State private var selectedImageURL: String?
@@ -306,10 +483,7 @@ struct ParsedContentView: View {
                 switch block {
                 case .text(let content):
                     if !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                        Text(content)
-                            .font(.body)
-                            .foregroundColor(.forumTextPrimary.opacity(0.9))
-                            .lineSpacing(6)
+                        LinkedTextView(text: content)
                             .fixedSize(horizontal: false, vertical: true)
                     }
                 case .image(let url):

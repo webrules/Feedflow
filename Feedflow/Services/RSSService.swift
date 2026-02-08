@@ -258,6 +258,35 @@ class RSSService: ForumService {
         processed = processed.replacingOccurrences(of: "<p>", with: "")
         processed = processed.replacingOccurrences(of: "</div>", with: "\n")
         
+        // 2.5. Extract links (<a href="...">) before stripping tags
+        // Preserve as [LINK:url|title] so LinkedTextView can render titled links
+        do {
+            let linkRegex = try NSRegularExpression(
+                pattern: "<a[^>]+href=\"([^\"]+)\"[^>]*>(.*?)</a>",
+                options: [.caseInsensitive, .dotMatchesLineSeparators]
+            )
+            let matches = linkRegex.matches(in: processed, range: NSRange(processed.startIndex..., in: processed))
+            
+            for match in matches.reversed() {
+                if let hrefRange = Range(match.range(at: 1), in: processed),
+                   let textRange = Range(match.range(at: 2), in: processed),
+                   let fullRange = Range(match.range, in: processed) {
+                    let href = String(processed[hrefRange])
+                    let linkText = String(processed[textRange])
+                        .replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                    
+                    // Skip anchors and javascript links
+                    if href.hasPrefix("#") || href.hasPrefix("javascript:") { continue }
+                    
+                    let title = linkText.isEmpty ? href : linkText
+                    processed.replaceSubrange(fullRange, with: "[LINK:\(href)|\(title)]")
+                }
+            }
+        } catch {
+            print("Regex error (links): \(error)")
+        }
+        
         // 3. Strip remaining HTML tags
         processed = processed.replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression, range: nil)
         

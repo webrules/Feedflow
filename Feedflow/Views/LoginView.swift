@@ -4,128 +4,288 @@ struct LoginView: View {
     @Environment(\.dismiss) var dismiss
     @ObservedObject var localizationManager = LocalizationManager.shared
     
+    // Sites that support login (excludes RSS)
+    private let loginSites: [ForumSite] = [.hackerNews, .fourD4Y, .v2ex, .linuxDo]
+    
     @State private var selectedSite: ForumSite = .fourD4Y
-    @State private var username: String = ""
-    @State private var password: String = ""
-    @State private var isSaving: Bool = false
-    @State private var showSavedMessage: Bool = false
+    @State private var showWebLogin = false
+    @State private var oauthOverrideURL: String? = nil  // When set, overrides the default login URL
+    @State private var loginStatus: [String: Bool] = [:]
     
     var body: some View {
         NavigationView {
-            Form {
-                Section(header: Text("select_site".localized())) {
-                    Picker("site".localized(), selection: $selectedSite) {
-                        ForEach(ForumSite.allCases) { site in
-                            Text(site.makeService().name).tag(site)
-                        }
-                    }
-                    .pickerStyle(.menu)
-                    .onChange(of: selectedSite) { _ in
-                        loadCredentials()
-                    }
-                }
+            ZStack {
+                Color.forumBackground.ignoresSafeArea()
                 
-                Section(header: Text("credentials".localized())) {
-                    TextField("username".localized(), text: $username)
-                        .textContentType(.username)
-                        .autocapitalization(.none)
-                    
-                    SecureField("password".localized(), text: $password)
-                        .textContentType(.password)
-                }
-                
-                Section {
-                    Button(action: saveCredentials) {
-                        HStack {
-                            Spacer()
-                            if isSaving {
-                                ProgressView()
-                            } else {
-                                Text("save_credentials".localized())
-                            }
-                            Spacer()
-                        }
+                ScrollView {
+                    VStack(spacing: 20) {
+                        siteSelector
+                        loginOptionsForSelectedSite
                     }
-                    .disabled(username.isEmpty || password.isEmpty)
-                }
-                
-                if showSavedMessage {
-                    Section {
-                        HStack {
-                            Image(systemName: "checkmark.circle.fill")
-                                .foregroundColor(.green)
-                            Text("credentials_saved".localized())
-                                .foregroundColor(.green)
-                        }
-                    }
-                }
-                
-                Section(header: Text("note".localized())) {
-                    Text("credentials_note".localized())
-                        .font(.caption)
-                        .foregroundColor(.gray)
+                    .padding()
                 }
             }
             .navigationTitle("login".localized())
+            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("cancel".localized()) {
-                        dismiss()
+                    Button("cancel".localized()) { dismiss() }
+                        .foregroundColor(.forumAccent)
+                }
+            }
+            .sheet(isPresented: $showWebLogin, onDismiss: {
+                oauthOverrideURL = nil  // Reset override when sheet closes
+            }) {
+                if let baseConfig = SiteLoginConfig.config(for: selectedSite) {
+                    let effectiveConfig: SiteLoginConfig = {
+                        if let overrideURL = oauthOverrideURL {
+                            return SiteLoginConfig(
+                                site: baseConfig.site,
+                                loginURL: overrideURL,
+                                successURLPatterns: baseConfig.successURLPatterns,
+                                oauthOptions: baseConfig.oauthOptions
+                            )
+                        }
+                        return baseConfig
+                    }()
+                    WebLoginSheetView(config: effectiveConfig) { cookies in
+                        handleLoginSuccess(site: selectedSite, cookies: cookies)
                     }
                 }
             }
             .onAppear {
-                loadCredentials()
+                loadLoginStatuses()
             }
         }
     }
     
-    private func loadCredentials() {
-        let siteId = selectedSite.rawValue
-        
-        // Load and decrypt username
-        if let encryptedUsername = DatabaseManager.shared.getSetting(key: "login_\(siteId)_username"),
-           let decryptedUsername = EncryptionHelper.shared.decrypt(encryptedUsername) {
-            username = decryptedUsername
-        } else {
-            username = ""
+    // MARK: - Site Selector
+    
+    private var siteSelector: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("select_site".localized())
+                .font(.caption)
+                .foregroundColor(.forumTextSecondary)
+                .textCase(.uppercase)
+            
+            HStack(spacing: 12) {
+                ForEach(loginSites) { site in
+                    Button(action: {
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            selectedSite = site
+                        }
+                    }) {
+                        VStack(spacing: 6) {
+                            Image(systemName: site.makeService().logo)
+                                .font(.system(size: 22))
+                                .frame(width: 44, height: 44)
+                                .background(
+                                    selectedSite == site
+                                    ? Color.forumAccent.opacity(0.15)
+                                    : Color.forumCard
+                                )
+                                .cornerRadius(12)
+                            
+                            Text(siteShortName(site))
+                                .font(.system(size: 11, weight: .medium))
+                                .lineLimit(1)
+                            
+                            if loginStatus[site.makeService().id] == true {
+                                Image(systemName: "checkmark.circle.fill")
+                                    .font(.system(size: 10))
+                                    .foregroundColor(.green)
+                            }
+                        }
+                        .foregroundColor(
+                            selectedSite == site
+                            ? .forumAccent
+                            : .forumTextSecondary
+                        )
+                        .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding()
+            .background(Color.forumCard)
+            .cornerRadius(16)
         }
-        
-        // Don't load password for security - user needs to re-enter
-        password = ""
     }
     
-    private func saveCredentials() {
-        isSaving = true
-        let siteId = selectedSite.rawValue
-        
-        // Encrypt and store username/password
-        if let encryptedUsername = EncryptionHelper.shared.encrypt(username),
-           let encryptedPassword = EncryptionHelper.shared.encrypt(password) {
-            DatabaseManager.shared.saveSetting(key: "login_\(siteId)_username", value: encryptedUsername)
-            DatabaseManager.shared.saveSetting(key: "login_\(siteId)_password", value: encryptedPassword)
+    // MARK: - Login Options
+    
+    private var loginOptionsForSelectedSite: some View {
+        VStack(spacing: 16) {
+            if let config = SiteLoginConfig.config(for: selectedSite) {
+                webLoginButton(config: config)
+                
+                if !config.oauthOptions.isEmpty {
+                    oauthSection(config: config)
+                }
+                
+                loginNote
+            }
         }
-        
-        // Perform site-specific login and store cookies (e.g., 4d4y)
-        if selectedSite == .fourD4Y {
-            Task {
-                do {
-                    let service = FourD4YService()
-                    let cookies = try await service.login(username: username, password: password)
-                    DatabaseManager.shared.saveCookies(siteId: siteId, cookies: cookies)
-                } catch {
-                    print("Login error for site \(siteId): \(error)")
+    }
+    
+    private func webLoginButton(config: SiteLoginConfig) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("login_with_browser".localized())
+                .font(.caption)
+                .foregroundColor(.forumTextSecondary)
+                .textCase(.uppercase)
+            
+            Button(action: {
+                oauthOverrideURL = nil
+                showWebLogin = true
+            }) {
+                HStack(spacing: 12) {
+                    Image(systemName: "globe")
+                        .font(.system(size: 20))
+                    
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(LocalizationManager.shared.localizedString("login_to_site") + " " + config.site.makeService().name)
+                            .font(.system(size: 16, weight: .semibold))
+                        Text("login_captcha_support".localized())
+                            .font(.system(size: 12))
+                            .foregroundColor(.forumTextSecondary)
+                    }
+                    
+                    Spacer()
+                    
+                    Image(systemName: "arrow.up.right.square")
+                        .foregroundColor(.forumAccent)
+                }
+                .padding()
+                .background(Color.forumCard)
+                .cornerRadius(12)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12)
+                        .stroke(Color.forumAccent.opacity(0.3), lineWidth: 1)
+                )
+            }
+            .foregroundColor(.forumTextPrimary)
+            .buttonStyle(.plain)
+        }
+    }
+    
+    private func oauthSection(config: SiteLoginConfig) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                VStack { Divider() }
+                Text("login_or".localized())
+                    .font(.caption)
+                    .foregroundColor(.forumTextSecondary)
+                VStack { Divider() }
+            }
+            
+            Text("login_with_provider".localized())
+                .font(.caption)
+                .foregroundColor(.forumTextSecondary)
+                .textCase(.uppercase)
+            
+            LazyVGrid(columns: [
+                GridItem(.flexible()),
+                GridItem(.flexible())
+            ], spacing: 10) {
+                ForEach(config.oauthOptions) { option in
+                    Button(action: {
+                        oauthOverrideURL = option.loginPath
+                        showWebLogin = true
+                    }) {
+                        HStack(spacing: 8) {
+                            Image(systemName: option.icon)
+                                .font(.system(size: 16))
+                            Text(option.name)
+                                .font(.system(size: 14, weight: .medium))
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 12)
+                        .background(Color.forumCard)
+                        .cornerRadius(10)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 10)
+                                .stroke(Color.gray.opacity(0.2), lineWidth: 1)
+                        )
+                    }
+                    .foregroundColor(.forumTextPrimary)
+                    .buttonStyle(.plain)
                 }
             }
         }
-        
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-            isSaving = false
-            showSavedMessage = true
+    }
+    
+    private var loginNote: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("note".localized())
+                .font(.caption)
+                .foregroundColor(.forumTextSecondary)
+                .textCase(.uppercase)
             
-            DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
-                showSavedMessage = false
-            }
+            Text("login_web_note".localized())
+                .font(.caption)
+                .foregroundColor(.forumTextSecondary)
+                .padding()
+                .background(Color.forumCard)
+                .cornerRadius(10)
+        }
+    }
+    
+    // MARK: - Actions
+    
+    private func handleLoginSuccess(site: ForumSite, cookies: [HTTPCookie]) {
+        let siteId = site.makeService().id  // Use service ID, not enum rawValue
+        
+        // Filter to only save cookies for the relevant domain
+        // WKWebView's getAllCookies returns cookies from ALL domains (Google, Cloudflare, etc.)
+        let domainFilter = siteDomain(site)
+        let relevantCookies = cookies.filter { cookie in
+            cookie.domain.contains(domainFilter)
+        }
+        
+        print("[Login] Total cookies from WKWebView: \(cookies.count)")
+        print("[Login] Relevant cookies for \(siteId) (domain: \(domainFilter)): \(relevantCookies.count)")
+        for cookie in relevantCookies {
+            print("[Login]   - \(cookie.name) = \(cookie.value.prefix(20))... (domain: \(cookie.domain), path: \(cookie.path), expires: \(cookie.expiresDate?.description ?? "session"))")
+        }
+        
+        DatabaseManager.shared.replaceCookies(siteId: siteId, cookies: relevantCookies)
+        
+        // Verify cookies were persisted
+        let verified = DatabaseManager.shared.getCookies(siteId: siteId) ?? []
+        print("[Login] Verification: \(verified.count) cookies readable from DB for \(siteId)")
+        
+        for cookie in relevantCookies {
+            HTTPCookieStorage.shared.setCookie(cookie)
+        }
+        
+        loginStatus[siteId] = true
+    }
+    
+    private func siteDomain(_ site: ForumSite) -> String {
+        switch site {
+        case .fourD4Y: return "4d4y.com"
+        case .hackerNews: return "ycombinator.com"
+        case .v2ex: return "v2ex.com"
+        case .linuxDo: return "linux.do"
+        case .rss: return ""
+        }
+    }
+    
+    private func loadLoginStatuses() {
+        for site in loginSites {
+            let siteId = site.makeService().id
+            loginStatus[siteId] = DatabaseManager.shared.hasCookies(siteId: siteId)
+        }
+    }
+    
+    private func siteShortName(_ site: ForumSite) -> String {
+        switch site {
+        case .hackerNews: return "HN"
+        case .fourD4Y: return "4D4Y"
+        case .v2ex: return "V2EX"
+        case .linuxDo: return "Linux"
+        case .rss: return "RSS"
         }
     }
 }
