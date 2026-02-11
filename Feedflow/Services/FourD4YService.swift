@@ -319,7 +319,7 @@ class FourD4YService: ForumService {
             print("[4D4Y] No saved credentials found for auto-login.")
             return false
         }
-        
+
         do {
             let cookies = try await login(username: username, password: password)
             if !cookies.isEmpty {
@@ -331,6 +331,179 @@ class FourD4YService: ForumService {
             print("[4D4Y] Auto-login failed: \(error)")
         }
         return false
+    }
+
+    // MARK: - AI Summary Helper: Fetch Last Post Threads (24h) with Pagination
+
+    /// Fetches threads ordered by last post within 24 hours, with pagination support
+    /// - Parameter maxPages: Maximum number of pages to fetch (default 10 to prevent excessive load)
+    /// - Returns: Array of all threads found across pages
+    func fetchLastPostThreads(maxPages: Int = 10) async throws -> [Thread] {
+        // Ensure we have a SID
+        if currentSID == nil {
+            _ = try await fetchCategories()
+        }
+
+        let baseURL = "https://www.4d4y.com/forum/forumdisplay.php?fid=2&orderby=lastpost&filter=86400"
+        let sidParam = currentSID.map { "&sid=\($0)" } ?? ""
+
+        // Fetch page 1 to determine total pages
+        let page1URL = URL(string: "\(baseURL)&page=1\(sidParam)")!
+        print("[4D4Y] Fetching last post threads (24h) page 1: \(page1URL)")
+        let page1HTML = try await fetchContent(url: page1URL)
+
+        // Parse max page number from pagination HTML
+        let maxPageNum = extractMaxPageNumber(from: page1HTML)
+        let pagesToFetch = min(maxPageNum, maxPages)
+        print("[4D4Y] Found \(maxPageNum) total pages, will fetch up to \(pagesToFetch) pages")
+
+        // Parse threads from page 1
+        var allThreads = parseThreadListHTML(page1HTML, fid: "2")
+        print("[4D4Y] Page 1: Found \(allThreads.count) threads")
+
+        // If there are more pages, fetch them in parallel
+        if pagesToFetch > 1 {
+            let remainingThreads = await withTaskGroup(of: [Thread].self) { group in
+                for page in 2...pagesToFetch {
+                    group.addTask {
+                        do {
+                            let pageURL = URL(string: "\(baseURL)&page=\(page)\(sidParam)")!
+                            let html = try await self.fetchContent(url: pageURL)
+                            let threads = self.parseThreadListHTML(html, fid: "2")
+                            print("[4D4Y] Page \(page): Found \(threads.count) threads")
+                            return threads
+                        } catch {
+                            print("[4D4Y] Failed to fetch page \(page): \(error)")
+                            return []
+                        }
+                    }
+                }
+
+                var results: [Thread] = []
+                for await threads in group {
+                    results.append(contentsOf: threads)
+                }
+                return results
+            }
+            allThreads.append(contentsOf: remainingThreads)
+        }
+
+        print("[4D4Y] Total threads fetched: \(allThreads.count)")
+        return allThreads
+    }
+
+    /// Extracts the maximum page number from pagination HTML
+    /// - Parameter html: The HTML content containing pagination div
+    /// - Returns: Maximum page number (defaults to 1 if not found)
+    private func extractMaxPageNumber(from html: String) -> Int {
+        // Pattern: <div class="pages">(.*?)</div>
+        guard let pagesRegex = try? NSRegularExpression(
+            pattern: "<div class=\"pages\">(.*?)</div>",
+            options: [.caseInsensitive, .dotMatchesLineSeparators]
+        ),
+        let match = pagesRegex.firstMatch(in: html, options: [], range: NSRange(html.startIndex..., in: html)),
+        let range = Range(match.range(at: 1), in: html) else {
+            return 1
+        }
+
+        let pagesContent = String(html[range])
+
+        // Extract all numbers from pagination content
+        // Pattern: (?:>|\s)(\d+)(?:<|\s)
+        guard let numRegex = try? NSRegularExpression(pattern: "(?:>|\\s)(\\d+)(?:<|\\s)", options: []) else {
+            return 1
+        }
+
+        let numMatches = numRegex.matches(in: pagesContent, range: NSRange(pagesContent.startIndex..., in: pagesContent))
+        let nums = numMatches.compactMap { m -> Int? in
+            guard let r = Range(m.range(at: 1), in: pagesContent) else { return nil }
+            return Int(String(pagesContent[r]))
+        }
+
+        return nums.max() ?? 1
+    }
+
+    /// Parses thread list HTML and returns array of Thread objects
+    /// - Parameters:
+    ///   - html: The HTML content to parse
+    ///   - fid: Forum ID
+    /// - Returns: Array of parsed threads
+    private func parseThreadListHTML(_ html: String, fid: String) -> [Thread] {
+        var threads: [Thread] = []
+        let community = Community(id: fid, name: "4D4Y", description: "", category: "", activeToday: 0, onlineNow: 0)
+
+        // Extract thread rows - pattern from existing fetchCategoryThreadsInternal
+        let threadRowPattern = "<tbody[^>]*id=\"(?:normalthread_|thread_)(\\d+)\"[^>]*>(.*?)</tbody>"
+        guard let threadRowRegex = try? NSRegularExpression(
+            pattern: threadRowPattern,
+            options: [.caseInsensitive, .dotMatchesLineSeparators]
+        ) else {
+            return threads
+        }
+
+        let threadMatches = threadRowRegex.matches(in: html, options: [], range: NSRange(html.startIndex..., in: html))
+
+        for threadMatch in threadMatches {
+            guard let tidRange = Range(threadMatch.range(at: 1), in: html),
+                  let rowContentRange = Range(threadMatch.range(at: 2), in: html) else {
+                continue
+            }
+
+            let tid = String(html[tidRange])
+            let rowContent = String(html[rowContentRange])
+
+            // Extract title
+            var title = "Unknown Title"
+            if let titleRegex = try? NSRegularExpression(
+                pattern: "href=\"viewthread\\.php\\?tid=\\d+[^\"]*\"[^>]*>([^<]+)</a>",
+                options: .caseInsensitive
+            ),
+            let titleMatch = titleRegex.firstMatch(in: rowContent, options: [], range: NSRange(rowContent.startIndex..., in: rowContent)),
+            let titleTextRange = Range(titleMatch.range(at: 1), in: rowContent) {
+                title = String(rowContent[titleTextRange])
+            }
+
+            // Extract author
+            var authorName = "Unknown"
+            if let authorRegex = try? NSRegularExpression(
+                pattern: "<td\\s+class=\"author\"[^>]*>.*?<a[^>]*>([^<]+)</a>",
+                options: [.caseInsensitive, .dotMatchesLineSeparators]
+            ),
+            let authorMatch = authorRegex.firstMatch(in: rowContent, options: [], range: NSRange(rowContent.startIndex..., in: rowContent)),
+            let authorTextRange = Range(authorMatch.range(at: 1), in: rowContent) {
+                authorName = String(rowContent[authorTextRange]).trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+
+            // Extract reply count
+            var replyCount = 0
+            if let numsRegex = try? NSRegularExpression(
+                pattern: "<td\\s+class=\"nums\"[^>]*>.*?<strong>(\\d+)</strong>",
+                options: [.caseInsensitive, .dotMatchesLineSeparators]
+            ),
+            let numsMatch = numsRegex.firstMatch(in: rowContent, options: [], range: NSRange(rowContent.startIndex..., in: rowContent)),
+            let countTextRange = Range(numsMatch.range(at: 1), in: rowContent),
+            let count = Int(String(rowContent[countTextRange])) {
+                replyCount = count
+            }
+
+            // Add thread if not duplicate
+            if !threads.contains(where: { $0.id == tid }) {
+                threads.append(Thread(
+                    id: tid,
+                    title: title,
+                    content: "",
+                    author: User(id: "0", username: authorName, avatar: "person.circle", role: nil),
+                    community: community,
+                    timeAgo: "",
+                    likeCount: 0,
+                    commentCount: replyCount,
+                    isLiked: false,
+                    tags: nil
+                ))
+            }
+        }
+
+        return threads
     }
     
     func fetchThreadDetail(threadId: String, page: Int) async throws -> (Thread, [Comment], Int?) {

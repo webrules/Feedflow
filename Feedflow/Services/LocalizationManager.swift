@@ -105,6 +105,19 @@ class LocalizationManager: ObservableObject {
             "no_summary": ["en": "No summary available.", "zh": "暂无摘要。"],
             "generate_daily_summary": ["en": "Generate Daily Summary", "zh": "生成每日摘要"],
             "no_updates_24h": ["en": "No updates found in the last 24 hours.", "zh": "最近24小时内没有更新。"],
+
+            // Home AI Summary
+            "home_ai_summary": ["en": "Tech News Summary", "zh": "科技新闻摘要"],
+            "ai_summary": ["en": "AI Summary", "zh": "AI 摘要"],
+            "generating_summary": ["en": "Generating summary...", "zh": "正在生成摘要..."],
+            "fetching_posts": ["en": "Fetching posts from 3 sources...", "zh": "正在从3个来源获取帖子..."],
+            "found_posts": ["en": "Found %d posts", "zh": "找到 %d 个帖子"],
+            "hacker_news_best": ["en": "Hacker News Best", "zh": "Hacker News 精选"],
+            "v2ex_hot": ["en": "V2EX Hot", "zh": "V2EX 热门"],
+            "4d4y_active": ["en": "4D4Y Active (24h)", "zh": "4D4Y 活跃（24小时）"],
+            "main_themes": ["en": "Main Themes", "zh": "主要主题"],
+            "force_refresh": ["en": "Refresh", "zh": "刷新"],
+            "refreshing": ["en": "Refreshing...", "zh": "刷新中..."],
             
             // Image Viewer
             "failed_load_image": ["en": "Failed to load image", "zh": "图片加载失败"],

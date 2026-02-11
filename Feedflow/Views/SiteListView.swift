@@ -145,18 +145,18 @@ struct SiteListView: View {
     @State private var showSettings: Bool = false
     @State private var showLogin: Bool = false
     @State private var showBookmarks: Bool = false
-    @State private var showCommunityConfig: Bool = false
+    @State private var showAISummary: Bool = false
     
     var body: some View {
         ZStack {
             Color.forumBackground.ignoresSafeArea()
             
             VStack(spacing: 24) {
-                Text("select_community".localized())
-                    .font(.title2)
-                    .bold()
-                    .foregroundColor(.forumTextPrimary)
-                    .padding(.top, 40)
+//                Text("select_community".localized())
+//                    .font(.title2)
+//                    .bold()
+//                    .foregroundColor(.forumTextPrimary)
+//                    .padding(.top, 40)
                 
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 16)], spacing: 16) {
                     ForEach(communitySettings.visibleSites) { site in
@@ -186,58 +186,66 @@ struct SiteListView: View {
                 
                 Spacer()
             }
-            .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    HStack(spacing: 16) {
-                        Button(action: {
-                            showCommunityConfig = true
-                        }) {
-                            Image(systemName: "gearshape")
-                                .foregroundColor(.forumTextPrimary)
-                        }
-                        
-                        Button(action: {
-                            themeManager.isDarkMode.toggle()
-                        }) {
-                            Image(systemName: themeManager.isDarkMode ? "moon.fill" : "sun.max.fill")
-                                .foregroundColor(.forumTextPrimary)
-                        }
-                        
-                        Button(action: {
-                            LocalizationManager.shared.currentLanguage = 
-                                LocalizationManager.shared.currentLanguage == "en" ? "zh" : "en"
-                        }) {
-                            Text(LocalizationManager.shared.currentLanguage == "en" ? "EN" : "中")
-                                .font(.system(size: 14, weight: .semibold))
-                                .foregroundColor(.forumTextPrimary)
-                        }
+//            .navigationTitle("Feedflow")
+            .safeAreaInset(edge: .top, spacing: 0) {
+                HStack(spacing: 0) {
+                    // AI Summary
+                    Button(action: {
+                        showAISummary = true
+                    }) {
+                        Image(systemName: "sparkles")
+                            .foregroundColor(.forumTextPrimary)
+                            .frame(maxWidth: .infinity)
+                    }
+
+                    // Bookmarks
+                    Button(action: {
+                        showBookmarks = true
+                    }) {
+                        Image(systemName: "bookmark.fill")
+                            .foregroundColor(.forumTextPrimary)
+                            .frame(maxWidth: .infinity)
+                    }
+
+                    // EN/CN Toggle
+                    Button(action: {
+                        LocalizationManager.shared.currentLanguage =
+                            LocalizationManager.shared.currentLanguage == "en" ? "zh" : "en"
+                    }) {
+                        Text(LocalizationManager.shared.currentLanguage == "en" ? "🇺🇸" : "🇨🇳")
+                            .font(.system(size: 20))
+                            .frame(maxWidth: .infinity)
+                    }
+
+                    // Light/Dark Toggle
+                    Button(action: {
+                        themeManager.isDarkMode.toggle()
+                    }) {
+                        Image(systemName: themeManager.isDarkMode ? "moon.fill" : "sun.max.fill")
+                            .foregroundColor(.forumTextPrimary)
+                            .frame(maxWidth: .infinity)
+                    }
+
+                    // Login
+                    Button(action: {
+                        showLogin = true
+                    }) {
+                        Image(systemName: "person.crop.circle.fill")
+                            .foregroundColor(.forumTextPrimary)
+                            .frame(maxWidth: .infinity)
+                    }
+
+                    // Settings
+                    Button(action: {
+                        showSettings = true
+                    }) {
+                        Image(systemName: "gearshape.fill")
+                            .foregroundColor(.forumTextPrimary)
+                            .frame(maxWidth: .infinity)
                     }
                 }
-                
-                ToolbarItem(placement: .navigationBarLeading) {
-                    HStack(spacing: 16) {
-                        Button(action: {
-                            showLogin = true
-                        }) {
-                            Image(systemName: "person.fill")
-                                .foregroundColor(.forumTextPrimary)
-                        }
-                        
-                        Button(action: {
-                            showSettings = true
-                        }) {
-                            Image(systemName: "key.fill")
-                                .foregroundColor(.forumTextPrimary)
-                        }
-                        
-                        Button(action: {
-                            showBookmarks = true
-                        }) {
-                            Image(systemName: "bookmark.fill")
-                                .foregroundColor(.forumTextPrimary)
-                        }
-                    }
-                }
+                .frame(height: 44)
+                .background(Color.forumCard)
             }
             .sheet(isPresented: $showSettings) {
                 SettingsView()
@@ -248,8 +256,8 @@ struct SiteListView: View {
             .sheet(isPresented: $showBookmarks) {
                 BookmarksView()
             }
-            .sheet(isPresented: $showCommunityConfig) {
-                CommunityConfigView()
+            .sheet(isPresented: $showAISummary) {
+                HomeAISummaryView()
             }
         }
     }
