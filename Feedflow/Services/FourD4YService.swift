@@ -7,6 +7,7 @@ class FourD4YService: ForumService {
     var logo: String { "4.square.fill" } // System icon
     
     private let baseURL = "https://www.4d4y.com/forum"
+    private let userAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     private var currentSID: String?
     private var currentFormHash: String?
     
@@ -25,7 +26,7 @@ class FourD4YService: ForumService {
         let loginPageURL = URL(string: "\(baseURL)/logging.php?action=login")!
         var initialRequest = URLRequest(url: loginPageURL)
         initialRequest.httpMethod = "GET"
-        initialRequest.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36", forHTTPHeaderField: "User-Agent")
+        initialRequest.setValue(userAgent, forHTTPHeaderField: "User-Agent")
         
         // Perform GET to obtain any required cookies (e.g., cf_clearance)
         let (_, _) = try await URLSession.shared.data(for: initialRequest)
@@ -49,7 +50,7 @@ class FourD4YService: ForumService {
         request.httpMethod = "POST"
         request.httpBody = postBody
         request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
-        request.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36", forHTTPHeaderField: "User-Agent")
+        request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
         // Include cookies from the GET request
         let cookieHeader = HTTPCookie.requestHeaderFields(with: loginPageCookies)
         request.allHTTPHeaderFields?.merge(cookieHeader) { (_, new) in new }
@@ -86,23 +87,50 @@ class FourD4YService: ForumService {
     }
     
     private func fetchContent(url: URL) async throws -> String {
+        // Ensure system storage and local database are in sync before request
+        syncCookiesToSystem()
+        
         // Load saved cookies directly from DB
         let savedCookies = DatabaseManager.shared.getCookies(siteId: id) ?? []
         let relevant = savedCookies.filter { $0.domain.contains("4d4y.com") }
         
         var request = URLRequest(url: url)
-        request.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36", forHTTPHeaderField: "User-Agent")
+        request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
+        
+        print("[4D4Y] Fetching URL: \(url.absoluteString)")
         
         // Manually set cookies in the request header to guarantee they're sent
-        // (HTTPCookieStorage automatic handling can silently drop cookies)
         if !relevant.isEmpty {
             let cookieHeader = relevant.map { "\($0.name)=\($0.value)" }.joined(separator: "; ")
             request.setValue(cookieHeader, forHTTPHeaderField: "Cookie")
-            request.httpShouldHandleCookies = false  // Don't let URLSession override our manual cookies
-            print("[4D4Y] Sending \(relevant.count) cookies manually: \(relevant.map { $0.name }.joined(separator: ", "))")
+            request.httpShouldHandleCookies = false  // Manual control over cookie injection
+            
+            if !cookieHeader.contains("cdb_saltkey") {
+                print("[4D4Y] WARNING: cdb_saltkey missing from request cookies!")
+            }
+        } else {
+            print("[4D4Y] No relevant cookies found for request.")
         }
         
-        let (data, _) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await URLSession.shared.data(for: request)
+        
+        if let httpResponse = response as? HTTPURLResponse {
+            print("[4D4Y] Response Status: \(httpResponse.statusCode)")
+            
+            // Capture and persist cookies from response headers (e.g., new cdb_sid)
+            if let headerFields = httpResponse.allHeaderFields as? [String: String],
+               let url = httpResponse.url {
+                let responseCookies = HTTPCookie.cookies(withResponseHeaderFields: headerFields, for: url)
+                if !responseCookies.isEmpty {
+                    print("[4D4Y] Received \(responseCookies.count) new cookies. Updating local jar...")
+                    DatabaseManager.shared.saveCookies(siteId: id, cookies: responseCookies)
+                    // Also update in-memory storage immediately
+                    for cookie in responseCookies {
+                        HTTPCookieStorage.shared.setCookie(cookie)
+                    }
+                }
+            }
+        }
         
 
         // Try GBK decode first
@@ -160,9 +188,10 @@ class FourD4YService: ForumService {
     
     private func fetchCategoriesInternal(retryCount: Int) async throws -> [Community] {
         let url = URL(string: "\(baseURL)/index.php")!
-        print("[4D4Y] Fetching index: \(url)")
+        print("[4D4Y] Fetching categories (index page). SID: \(currentSID ?? "nil"), Retry: \(retryCount)")
         let html = try await fetchContent(url: url)
         print("[4D4Y] Index fetched. Length: \(html.count)")
+        print("[4D4Y] Full HTML Response:\n\(html)")
         
         extractSID(from: html)
         
@@ -178,7 +207,11 @@ class FourD4YService: ForumService {
         let range = NSRange(html.startIndex..., in: html)
         let matches = regex.matches(in: html, options: [], range: range)
         
-        print("[4D4Y] Found \(matches.count) forum matches")
+        print("[4D4Y] Found \(matches.count) forum matches in HTML")
+        
+        if matches.isEmpty && html.contains("登录") {
+            print("[4D4Y] Matches empty and page contains '登录' (Login). User is likely logged out.")
+        }
         
         for match in matches {
             if let fidRange = Range(match.range(at: 1), in: html),
@@ -732,7 +765,7 @@ class FourD4YService: ForumService {
         
         // Comprehensive headers to mimic a browser AJAX request
         request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
-        request.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36", forHTTPHeaderField: "User-Agent")
+        request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
         request.setValue("text/xml, */*", forHTTPHeaderField: "Accept")
         request.setValue("XMLHttpRequest", forHTTPHeaderField: "X-Requested-With")
         request.setValue("\(baseURL)/viewthread.php?tid=\(topicId)", forHTTPHeaderField: "Referer")
@@ -812,7 +845,7 @@ class FourD4YService: ForumService {
         request.httpMethod = "POST"
         request.httpBody = bodyData
         request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
-        request.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36", forHTTPHeaderField: "User-Agent")
+        request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
         request.setValue("text/xml, */*", forHTTPHeaderField: "Accept")
         request.setValue("XMLHttpRequest", forHTTPHeaderField: "X-Requested-With")
         
