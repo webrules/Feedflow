@@ -109,9 +109,8 @@ struct WebLoginView: UIViewRepresentable {
         webView.allowsBackForwardNavigationGestures = true
         webView.scrollView.contentInsetAdjustmentBehavior = .always
         
-        // Use a Safari-like user agent to avoid Google's "disallowed_useragent" block
-        // Google blocks OAuth from embedded WKWebViews with the default UA
-        webView.customUserAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
+        // Use the same User-Agent as FourD4YService to ensure cf_clearance cookie validity
+        webView.customUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
         
         if let url = URL(string: config.loginURL) {
             webView.load(URLRequest(url: url))

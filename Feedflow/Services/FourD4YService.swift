@@ -70,12 +70,15 @@ class FourD4YService: ForumService {
         let saved = DatabaseManager.shared.getCookies(siteId: id) ?? []
         // Only sync cookies that actually belong to 4d4y domain
         let relevant = saved.filter { $0.domain.contains("4d4y.com") }
+        
         if relevant.isEmpty {
-            print("[4D4Y] WARNING: No 4d4y cookies found in DB for site '\(id)'. User may not be logged in.")
+            print("[4D4Y] WARNING: No 4d4y cookies found in DB for site '\(id)'.")
         } else {
-            let names = relevant.map { "\($0.name)(\($0.domain))" }.joined(separator: ", ")
-            print("[4D4Y] Syncing \(relevant.count) cookies to system: \(names)")
+            let names = relevant.map { $0.name }.joined(separator: ", ")
+            let hasSaltKey = relevant.contains { $0.name == "cdb_saltkey" }
+            print("[4D4Y] Syncing \(relevant.count) cookies to system: \(names) (SaltKey: \(hasSaltKey))")
         }
+        
         for cookie in relevant {
             HTTPCookieStorage.shared.setCookie(cookie)
         }
@@ -154,9 +157,9 @@ class FourD4YService: ForumService {
             if let match = regex.firstMatch(in: html, options: [], range: range) {
                 if let r = Range(match.range(at: 1), in: html) {
                     self.currentSID = String(html[r])
-                    print("[4D4Y] Extracted SID: \(self.currentSID!)")
+                    print("[4D4Y] Extracted SID from HTML: \(self.currentSID!)")
                     
-                    // Set SID cookie on in-memory session only (don't persist to DB to avoid overwriting login cookies)
+                    // Set SID cookie and persist to DB to ensure session continuity
                     if let sidCookie = HTTPCookie(properties: [
                         .name: "cdb_sid",
                         .value: self.currentSID!,
@@ -165,6 +168,7 @@ class FourD4YService: ForumService {
                         .expires: Date().addingTimeInterval(86400)
                     ]) {
                         HTTPCookieStorage.shared.setCookie(sidCookie)
+                        DatabaseManager.shared.saveCookies(siteId: id, cookies: [sidCookie])
                     }
                 }
             }
