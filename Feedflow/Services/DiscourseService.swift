@@ -5,11 +5,33 @@ class DiscourseService: ForumService {
     var name: String { "Linux.do" }
     var id: String { "linux_do" }
     var logo: String { "https://linux.do/uploads/default/original/4X/c/c/d/ccd8c210609d498cbeb3d5201d4c259348447562.png" }
+    var requiresLogin: Bool { true }
     
     private let baseURL = "https://linux.do"
+    private var sessionRestored = false
     
     func getWebURL(for thread: Thread) -> String {
         return "\(baseURL)/t/\(thread.id)"
+    }
+    
+    func restoreSession() async -> Bool {
+        guard !sessionRestored else { return true }
+        sessionRestored = true
+        
+        // Sync saved cookies to system HTTPCookieStorage
+        let saved = DatabaseManager.shared.getCookies(siteId: id) ?? []
+        let relevant = saved.filter { $0.domain.contains("linux.do") }
+        
+        for cookie in relevant {
+            HTTPCookieStorage.shared.setCookie(cookie)
+        }
+        
+        if !relevant.isEmpty {
+            return true
+        }
+        
+        // No cookies — login needed
+        return false
     }
     
     func postComment(topicId: String, categoryId: String, content: String) async throws {
