@@ -220,31 +220,72 @@ class DiscourseService: ForumService {
     // MARK: - Fetching
     
     func fetchCategories() async throws -> [Community] {
-        guard let url = URL(string: "\(baseURL)/categories.json") else {
-            throw URLError(.badURL)
-        }
-        
-        let (data, _) = try await URLSession.shared.data(from: url)
-        let response = try JSONDecoder().decode(SiteResponse.self, from: data)
-        
-        return response.categoryList.categories.map { cat in
+        // Use "latest" as the primary feed since linux.do requires auth for category pages
+        var communities = [
             Community(
-                id: String(cat.id),
-                name: cat.name,
-                description: cat.description ?? "",
+                id: "latest",
+                name: "最新",
+                description: "Latest topics",
                 category: "General",
-                activeToday: cat.topicCount ?? 0,
-                onlineNow: Int.random(in: 10...500)
+                activeToday: 0,
+                onlineNow: 0
             )
+        ]
+        
+        // Try to fetch categories for display, but these may require auth
+        if let url = URL(string: "\(baseURL)/categories.json") {
+            do {
+                let (data, response) = try await URLSession.shared.data(from: url)
+                if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 {
+                    let siteResponse = try JSONDecoder().decode(SiteResponse.self, from: data)
+                    let cats = siteResponse.categoryList.categories.map { cat in
+                        Community(
+                            id: "\(cat.slug)/\(cat.id)",
+                            name: cat.name,
+                            description: cat.description ?? "",
+                            category: "General",
+                            activeToday: cat.topicCount ?? 0,
+                            onlineNow: 0
+                        )
+                    }
+                    communities.append(contentsOf: cats)
+                }
+            } catch {
+                print("[Discourse] Failed to fetch categories: \(error)")
+            }
         }
+        
+        return communities
     }
     
     func fetchCategoryThreads(categoryId: String, communities: [Community], page: Int) async throws -> [Thread] {
-        guard let url = URL(string: "\(baseURL)/c/\(categoryId).json?page=\(page - 1)") else {
-             throw URLError(.badURL)
+        let urlStr: String
+        if categoryId == "latest" {
+            urlStr = "\(baseURL)/latest.json?page=\(page - 1)"
+        } else {
+            // categoryId is "slug/id" format
+            urlStr = "\(baseURL)/c/\(categoryId)/l/latest.json?page=\(page - 1)"
         }
         
-        let (data, _) = try await URLSession.shared.data(from: url)
+        guard let url = URL(string: urlStr) else {
+            throw URLError(.badURL)
+        }
+        
+        let (data, response) = try await URLSession.shared.data(from: url)
+        
+        if let httpResponse = response as? HTTPURLResponse {
+            print("[Discourse] Fetching \(urlStr) - Status: \(httpResponse.statusCode)")
+            // If category page requires auth, fall back to latest
+            if httpResponse.statusCode == 403 && categoryId != "latest" {
+                print("[Discourse] Category requires auth, falling back to /latest.json")
+                guard let fallbackURL = URL(string: "\(baseURL)/latest.json?page=\(page - 1)") else {
+                    throw URLError(.badURL)
+                }
+                let (fallbackData, _) = try await URLSession.shared.data(from: fallbackURL)
+                return try parseThreadList(data: fallbackData, communities: communities)
+            }
+        }
+        
         return try parseThreadList(data: data, communities: communities)
     }
     
