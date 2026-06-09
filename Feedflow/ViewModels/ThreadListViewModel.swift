@@ -25,6 +25,9 @@ class ThreadListViewModel: ObservableObject {
     func loadTopics(for community: Community, isReturning: Bool = false) async {
         currentCommunity = community
         
+        // Restore session (cookies/credentials) proactively before fetching
+        await service.restoreSession()
+        
         // Create cache key
         let cacheKey = "\(service.id)_\(community.id)_page1"
         

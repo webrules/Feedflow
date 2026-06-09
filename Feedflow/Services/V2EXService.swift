@@ -6,6 +6,22 @@ class V2EXService: ForumService {
     var logo: String { "v.circle.fill" } // System icon
     
     private let baseURL = "https://v2ex.com"
+    private var sessionRestored = false
+    
+    func restoreSession() async {
+        guard !sessionRestored else { return }
+        sessionRestored = true
+        
+        // Load saved cookies from DB into the shared cookie storage
+        let cookies = DatabaseManager.shared.getCookies(siteId: id) ?? []
+        guard !cookies.isEmpty else { return }
+        
+        let relevant = cookies.filter { $0.domain.contains("v2ex.com") }
+        for cookie in relevant {
+            HTTPCookieStorage.shared.setCookie(cookie)
+        }
+        print("[V2EX] Restored \(relevant.count) cookies to session")
+    }
     
     func getWebURL(for thread: Thread) -> String {
         return "\(baseURL)/t/\(thread.id)"
