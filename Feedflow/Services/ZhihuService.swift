@@ -480,6 +480,7 @@ class ZhihuService: ForumService {
     var name: String { "知乎" }
     var id: String { "zhihu" }
     var logo: String { "z.circle.fill" }
+    var requiresLogin: Bool { true }
     
     // Zhihu API endpoints
     private let recommendURL = "https://api.zhihu.com/topstory/recommend"
@@ -509,8 +510,31 @@ class ZhihuService: ForumService {
     // Downvoted item IDs (persisted via DatabaseManager)
     private var downvotedIds: Set<String> = []
     
+    // Session restore flag
+    private var sessionRestored = false
+    
     init() {
         loadDownvotedIds()
+    }
+    
+    // MARK: - Session Restore
+    
+    func restoreSession() async -> Bool {
+        guard !sessionRestored else { return true }
+        sessionRestored = true
+        
+        let cookies = getAuthCookies()
+        if !cookies.isEmpty {
+            // Sync to system cookie storage
+            for cookie in cookies {
+                HTTPCookieStorage.shared.setCookie(cookie)
+            }
+            print("[Zhihu] Restored \(cookies.count) cookies to session")
+            return true
+        }
+        
+        // No cookies — user needs to log in
+        return false
     }
     
     // MARK: - Cookie Management
