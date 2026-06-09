@@ -65,6 +65,34 @@ class FourD4YService: ForumService {
         return newCookies
     }
     
+    private var sessionRestored = false
+    
+    var requiresLogin: Bool { true }
+    
+    func restoreSession() async -> Bool {
+        guard !sessionRestored else { return true }
+        sessionRestored = true
+        
+        // First, sync any saved cookies to the system
+        syncCookiesToSystem()
+        
+        // If we have cookies, session is ready
+        let cookies = DatabaseManager.shared.getCookies(siteId: id) ?? []
+        let relevant = cookies.filter { $0.domain.contains("4d4y.com") }
+        
+        if !relevant.isEmpty {
+            return true
+        }
+        
+        // No cookies — attempt auto-login with saved credentials
+        if (try? await performAutoLogin()) == true {
+            return true
+        }
+        
+        // No cookies and no saved credentials — login needed
+        return false
+    }
+    
     private func syncCookiesToSystem() {
         let saved = DatabaseManager.shared.getCookies(siteId: id) ?? []
         // Only sync cookies that actually belong to 4d4y domain

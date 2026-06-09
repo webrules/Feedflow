@@ -5,6 +5,13 @@ protocol ForumService {
     var id: String { get } // Unique identifier for the service
     var logo: String { get } // SF Symbol name
     
+    /// Whether this service requires login to display content.
+    var requiresLogin: Bool { get }
+    
+    /// Restores any saved session (cookies/credentials) before fetching content.
+    /// Returns true if session is ready, false if login is needed.
+    func restoreSession() async -> Bool
+    
     func fetchCategories() async throws -> [Community]
     func fetchCategoryThreads(categoryId: String, communities: [Community], page: Int) async throws -> [Thread]
     func fetchThreadDetail(threadId: String, page: Int) async throws -> (Thread, [Comment], Int?)
@@ -14,6 +21,12 @@ protocol ForumService {
 }
 
 extension ForumService {
+    // Default: service doesn't require login
+    var requiresLogin: Bool { false }
+    
+    // Default no-op — session is always ready
+    func restoreSession() async -> Bool { return true }
+    
     // Default implementation optional or helper
     func getWebURL(for thread: Thread) -> String { return "" }
     
