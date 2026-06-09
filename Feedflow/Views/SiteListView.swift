@@ -12,6 +12,18 @@ enum ForumSite: String, CaseIterable, Identifiable {
     
     var id: String { rawValue }
     
+    static func from(serviceId: String) -> ForumSite? {
+        switch serviceId {
+        case "4d4y": return .fourD4Y
+        case "linux_do": return .linuxDo
+        case "hackernews": return .hackerNews
+        case "v2ex": return .v2ex
+        case "rss": return .rss
+        case "zhihu": return .zhihu
+        default: return nil
+        }
+    }
+    
     func makeService() -> ForumService {
         switch self {
         case .fourD4Y: return FourD4YService()

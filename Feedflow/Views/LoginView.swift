@@ -7,10 +7,14 @@ struct LoginView: View {
     // Sites that support login (excludes RSS)
     private let loginSites: [ForumSite] = [.hackerNews, .fourD4Y, .v2ex, .linuxDo, .zhihu]
     
-    @State private var selectedSite: ForumSite = .fourD4Y
+    @State private var selectedSite: ForumSite
     @State private var showWebLogin = false
     @State private var oauthOverrideURL: String? = nil  // When set, overrides the default login URL
     @State private var loginStatus: [String: Bool] = [:]
+    
+    init(initialSite: ForumSite? = nil) {
+        _selectedSite = State(initialValue: initialSite ?? .fourD4Y)
+    }
     
     var body: some View {
         NavigationView {

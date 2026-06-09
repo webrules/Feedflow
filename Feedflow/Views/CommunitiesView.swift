@@ -98,7 +98,7 @@ struct CommunitiesView: View {
             // After login sheet closes, retry loading
             Task { await viewModel.refresh() }
         }) {
-            LoginView()
+            LoginView(initialSite: ForumSite.from(serviceId: service.id))
         }
         .onChange(of: viewModel.needsLogin) { needsLogin in
             if needsLogin {
