@@ -26,7 +26,7 @@ class ThreadListViewModel: ObservableObject {
         currentCommunity = community
         
         // Restore session (cookies/credentials) proactively before fetching
-        await service.restoreSession()
+        let _ = await service.restoreSession()
         
         // Create cache key
         let cacheKey = "\(service.id)_\(community.id)_page1"

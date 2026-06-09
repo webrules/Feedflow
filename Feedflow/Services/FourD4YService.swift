@@ -67,22 +67,30 @@ class FourD4YService: ForumService {
     
     private var sessionRestored = false
     
-    func restoreSession() async {
-        guard !sessionRestored else { return }
+    var requiresLogin: Bool { true }
+    
+    func restoreSession() async -> Bool {
+        guard !sessionRestored else { return true }
         sessionRestored = true
         
         // First, sync any saved cookies to the system
         syncCookiesToSystem()
         
-        // If we have cookies, verify they're still valid with a lightweight check
+        // If we have cookies, session is ready
         let cookies = DatabaseManager.shared.getCookies(siteId: id) ?? []
         let relevant = cookies.filter { $0.domain.contains("4d4y.com") }
         
-        if relevant.isEmpty {
-            // No cookies — attempt auto-login with saved credentials
-            _ = try? await performAutoLogin()
+        if !relevant.isEmpty {
+            return true
         }
-        // If cookies exist, they'll be validated on first fetch (existing retry logic handles expiry)
+        
+        // No cookies — attempt auto-login with saved credentials
+        if (try? await performAutoLogin()) == true {
+            return true
+        }
+        
+        // No cookies and no saved credentials — login needed
+        return false
     }
     
     private func syncCookiesToSystem() {

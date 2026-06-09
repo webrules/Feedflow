@@ -8,19 +8,20 @@ class V2EXService: ForumService {
     private let baseURL = "https://v2ex.com"
     private var sessionRestored = false
     
-    func restoreSession() async {
-        guard !sessionRestored else { return }
+    func restoreSession() async -> Bool {
+        guard !sessionRestored else { return true }
         sessionRestored = true
         
         // Load saved cookies from DB into the shared cookie storage
         let cookies = DatabaseManager.shared.getCookies(siteId: id) ?? []
-        guard !cookies.isEmpty else { return }
+        guard !cookies.isEmpty else { return true } // V2EX works without login (read-only)
         
         let relevant = cookies.filter { $0.domain.contains("v2ex.com") }
         for cookie in relevant {
             HTTPCookieStorage.shared.setCookie(cookie)
         }
         print("[V2EX] Restored \(relevant.count) cookies to session")
+        return true
     }
     
     func getWebURL(for thread: Thread) -> String {

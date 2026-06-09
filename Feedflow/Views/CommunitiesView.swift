@@ -6,6 +6,7 @@ struct CommunitiesView: View {
     let service: ForumService
     @State private var showFeedManager = false
     @State private var showDailySummary = false
+    @State private var showLoginSheet = false
     
     init(service: ForumService) {
         self.service = service
@@ -92,6 +93,17 @@ struct CommunitiesView: View {
         }
         .navigationDestination(for: Community.self) { community in
             ThreadListView(community: community, service: service)
+        }
+        .sheet(isPresented: $showLoginSheet, onDismiss: {
+            // After login sheet closes, retry loading
+            Task { await viewModel.refresh() }
+        }) {
+            LoginView()
+        }
+        .onChange(of: viewModel.needsLogin) { needsLogin in
+            if needsLogin {
+                showLoginSheet = true
+            }
         }
     }
 }

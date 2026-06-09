@@ -6,6 +6,7 @@ class ForumViewModel: ObservableObject {
     @Published var communities: [Community] = []
     @Published var isLoading: Bool = false
     @Published var selectedCategory: String = "All Categories"
+    @Published var needsLogin: Bool = false
     
     private let service: ForumService
     
@@ -20,6 +21,14 @@ class ForumViewModel: ObservableObject {
     func loadData() async {
         isLoading = true
         defer { isLoading = false }
+        
+        // Restore session first; if login is needed, signal the UI
+        let sessionReady = await service.restoreSession()
+        if !sessionReady && service.requiresLogin {
+            needsLogin = true
+            return
+        }
+        
         do {
             let fetchedCommunities = try await service.fetchCategories()
             self.communities = fetchedCommunities
@@ -38,6 +47,7 @@ class ForumViewModel: ObservableObject {
     }
     
     func refresh() async {
+        needsLogin = false
         await loadData()
     }
 }
