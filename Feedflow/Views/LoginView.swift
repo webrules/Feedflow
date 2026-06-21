@@ -62,7 +62,7 @@ struct LoginView: View {
                         return baseConfig
                     }()
                     WebLoginSheetView(config: effectiveConfig) { cookies in
-                        handleLoginSuccess(site: selectedSite, cookies: cookies)
+                        await handleLoginSuccess(site: selectedSite, cookies: cookies)
                     }
                 }
             }
@@ -309,7 +309,7 @@ struct LoginView: View {
 
     // MARK: - Actions
 
-    private func handleLoginSuccess(site: ForumSite, cookies: [HTTPCookie]) {
+    private func handleLoginSuccess(site: ForumSite, cookies: [HTTPCookie]) async -> Bool {
         let siteId = site.makeService().id  // Use service ID, not enum rawValue
 
         // Filter to only save cookies for the relevant domain
@@ -319,27 +319,24 @@ struct LoginView: View {
             cookie.domain.contains(domainFilter)
         }
 
-        print("[Login] Total cookies from WKWebView: \(cookies.count)")
-        print("[Login] Relevant cookies for \(siteId) (domain: \(domainFilter)): \(relevantCookies.count)")
-        for cookie in relevantCookies {
-            print("[Login]   - \(cookie.name) = \(cookie.value.prefix(20))... (domain: \(cookie.domain), path: \(cookie.path), expires: \(cookie.expiresDate?.description ?? "session"))")
-        }
+        AppLogger.debug("[Login] Total cookies from WKWebView: \(cookies.count)")
+        AppLogger.debug("[Login] Relevant cookies for \(siteId) (domain: \(domainFilter)): \(relevantCookies.count)")
 
         guard !relevantCookies.isEmpty else {
-            print("[Login] No relevant cookies found for \(siteId); leaving existing session unchanged.")
+            AppLogger.debug("[Login] No relevant cookies found for \(siteId); leaving existing session unchanged.")
             loginStatus[siteId] = false
-            return
+            return false
         }
 
         guard isAuthenticatedCookieSet(site: site, cookies: relevantCookies) else {
-            print("[Login] Cookie set for \(siteId) is missing an authentication cookie; leaving existing session unchanged.")
+            AppLogger.debug("[Login] Cookie set for \(siteId) is missing an authentication cookie; leaving existing session unchanged.")
             loginStatus[siteId] = DatabaseManager.shared.hasCookies(siteId: siteId)
-            return
+            return false
         }
 
         // Critical check for Zhihu authentication token
         if site == .zhihu && !relevantCookies.contains(where: { $0.name == "z_c0" }) {
-            print("[Login] CRITICAL WARNING: Zhihu login success but 'z_c0' cookie is missing! API requests will likely fail.")
+            AppLogger.debug("[Login] CRITICAL WARNING: Zhihu login success but 'z_c0' cookie is missing! API requests will likely fail.")
         }
 
         // Make session-only cookies persistent (30 days) so they survive app restarts.
@@ -355,38 +352,35 @@ struct LoginView: View {
 
         // Verify cookies were persisted
         let verified = DatabaseManager.shared.getCookies(siteId: siteId) ?? []
-        print("[Login] Verification: \(verified.count) cookies readable from DB for \(siteId)")
+        AppLogger.debug("[Login] Verification: \(verified.count) cookies readable from DB for \(siteId)")
 
         replaceRuntimeCookies(domainFilter: domainFilter, cookies: persistentCookies)
 
-        // Verify the session is actually usable by calling restoreSession.
-        // Don't set loginStatus to false first — just let the async verification update it.
+        let sessionValid = await site.makeService().restoreSession()
+        loginStatus[siteId] = sessionValid
+
+        if !sessionValid {
+            AppLogger.debug("[Login] WARNING: Session verification FAILED after login for \(siteId)")
+            isCompletingLogin = false
+            return false
+        }
+
+        guard !isCompletingLogin else { return true }
+        isCompletingLogin = true
+
+        // Auto-close login flows and navigate to selected site's categories.
+        showWebLogin = false
+        dismiss()
+
         Task {
-            let sessionValid = await site.makeService().restoreSession()
+            try? await Task.sleep(nanoseconds: 250_000_000)
             await MainActor.run {
-                loginStatus[siteId] = sessionValid
-                if !sessionValid {
-                    print("[Login] WARNING: Session verification FAILED after login for \(siteId)")
-                    isCompletingLogin = false
-                    return
-                }
-
-                guard !isCompletingLogin else { return }
-                isCompletingLogin = true
-
-                // Auto-close login flows and navigate to selected site's categories.
-                showWebLogin = false
-                dismiss()
-
-                Task {
-                    try? await Task.sleep(nanoseconds: 250_000_000)
-                    await MainActor.run {
-                        navigationManager.popToRoot()
-                        navigationManager.path.append(site)
-                    }
-                }
+                navigationManager.popToRoot()
+                navigationManager.path.append(site)
             }
         }
+
+        return true
     }
 
     private func siteDomain(_ site: ForumSite) -> String {
@@ -402,21 +396,15 @@ struct LoginView: View {
 
     private func isAuthenticatedCookieSet(site: ForumSite, cookies: [HTTPCookie]) -> Bool {
         switch site {
-        case .fourD4Y:
-            return cookies.contains { cookie in
-                let name = cookie.name.lowercased()
-                return name.contains("auth") || name.contains("login") || name.contains("member")
-            }
         case .zhihu:
             return cookies.contains { $0.name == "z_c0" }
-        case .linuxDo:
-            return cookies.contains { $0.name.lowercased().contains("_t") }
-        case .hackerNews:
-            return cookies.contains { $0.name.lowercased().contains("user") }
-        case .v2ex:
-            return cookies.contains { $0.name.lowercased().contains("a2") }
         case .rss:
             return true
+        default:
+            // Cookie names are not a stable authentication contract across
+            // deployments and OAuth providers. Each service validates the
+            // session against its own authenticated endpoint before keeping it.
+            return !cookies.isEmpty
         }
     }
 
