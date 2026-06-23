@@ -68,9 +68,7 @@ struct SiteLoginConfig {
             return authCookieNameFragments.contains { normalizedName.contains($0.lowercased()) }
         }
 
-        // Cookie names differ between site versions and OAuth providers.
-        // The site API verifies every candidate session before it is accepted.
-        return hasExpectedCookie || !relevantCookies.isEmpty
+        return hasExpectedCookie
     }
 
     func isSuccessURL(_ urlString: String) -> Bool {
@@ -228,6 +226,10 @@ struct WebLoginView: UIViewRepresentable {
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
             guard let currentURL = webView.url?.absoluteString else { return }
             AppLogger.debug("[WebLogin] Finished navigation on \(config.site.makeService().id): \(currentURL)")
+
+            // Clear the rejected signature on each new navigation so that a
+            // previously-rejected cookie set does not block a fresh attempt.
+            lastRejectedCookieSignature = nil
 
             let isSuccess = config.isSuccessURL(currentURL)
             let isPostLoginNavigation = config.isPostLoginNavigation(webView.url)
