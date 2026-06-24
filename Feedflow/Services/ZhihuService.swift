@@ -1402,21 +1402,66 @@ class ZhihuService: ForumService {
         AppLogger.debug("[Zhihu] Searching: \(query) page \(page) offset \(offset)")
 
         let request = buildRequest(url: url)
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, _) = try await URLSession.shared.data(for: request)
 
-        guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
-            throw NSError(domain: "ZhihuService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Search request failed"])
+        // Try structured decode first
+        let decoder = JSONDecoder()
+        if let searchResponse = try? decoder.decode(ZhihuSearchResponse.self, from: data) {
+            let items = searchResponse.data ?? []
+            let threads = convertSearchItemsToThreads(items)
+            let hasMore = !(searchResponse.paging?.isEnd ?? true)
+            AppLogger.debug("[Zhihu] Search returned \(threads.count) results (structured)")
+            return (threads, hasMore)
         }
 
-        let decoder = JSONDecoder()
-        let searchResponse = try decoder.decode(ZhihuSearchResponse.self, from: data)
+        // Fallback: manual parsing via JSONSerialization
+        AppLogger.debug("[Zhihu] Structured decode failed, trying manual parse")
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let dataArray = json["data"] as? [[String: Any]] else {
+            throw NSError(domain: "ZhihuService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Search response format unexpected"])
+        }
 
-        let items = searchResponse.data ?? []
-        let threads = convertSearchItemsToThreads(items)
+        let paging = json["paging"] as? [String: Any]
+        let hasMore = !(paging?["is_end"] as? Bool ?? true)
 
-        let hasMore = !(searchResponse.paging?.isEnd ?? true)
-        AppLogger.debug("[Zhihu] Search returned \(threads.count) results, hasMore: \(hasMore)")
+        let threads = dataArray.compactMap { item -> Thread? in
+            guard let object = item["object"] as? [String: Any],
+                  let objType = object["type"] as? String else { return nil }
+            guard ["answer", "article", "question"].contains(objType) else { return nil }
 
+            let objId = object["id"] as? Int ?? 0
+            let threadId = "\(objType)_\(objId)"
+
+            let effectiveTitle: String
+            if objType == "answer", let question = object["question"] as? [String: Any],
+               let qTitle = question["title"] as? String, !qTitle.isEmpty {
+                effectiveTitle = qTitle
+            } else {
+                effectiveTitle = object["title"] as? String ?? "无标题"
+            }
+
+            let excerpt = object["excerpt"] as? String ?? ""
+            let authorDict = object["author"] as? [String: Any]
+
+            let authorUid = authorDict?["id"] as? String ?? ""
+            let authorName = authorDict?["name"] as? String ?? "匿名用户"
+            let authorAvatar = normalizedAvatarURL(authorDict?["avatar_url"] as? String, template: authorDict?["avatar_url_template"] as? String)
+            let authorHeadline = authorDict?["headline"] as? String
+
+            return Thread(
+                id: threadId,
+                title: effectiveTitle,
+                content: excerpt,
+                author: User(id: authorUid, username: authorName, avatar: authorAvatar, role: authorHeadline),
+                community: Community(id: "search", name: "搜索", description: "", category: "zhihu", activeToday: 0, onlineNow: 0),
+                timeAgo: formatTimestamp(object["created_time"] as? Int ?? object["createdTime"] as? Int),
+                likeCount: object["voteup_count"] as? Int ?? 0,
+                commentCount: object["comment_count"] as? Int ?? 0,
+                tags: [objType == "answer" ? "回答" : objType == "article" ? "文章" : "问题"]
+            )
+        }
+
+        AppLogger.debug("[Zhihu] Search returned \(threads.count) results (manual)")
         return (threads, hasMore)
     }
 
@@ -1440,7 +1485,7 @@ class ZhihuService: ForumService {
                 author: User(
                     id: author?.id ?? "",
                     username: author?.name ?? "匿名用户",
-                    avatar: avatarURL(from: author),
+                    avatar: normalizedAvatarURL(author?.avatarUrl, template: author?.avatarUrlTemplate),
                     role: author?.headline
                 ),
                 community: Community(id: "search", name: "搜索", description: "", category: "zhihu", activeToday: 0, onlineNow: 0),

@@ -17,6 +17,7 @@ class ThreadListViewModel: ObservableObject {
     @Published var isSearchActive: Bool = false
     @Published var isSearching: Bool = false
     @Published var searchCanLoadMore: Bool = false
+    @Published var searchError: String? = nil
     private var searchPage = 1
     private var searchTask: Task<Void, Never>?
     private var savedThreads: [Thread] = []  // Saved pre-search threads for restoration
@@ -82,22 +83,27 @@ class ThreadListViewModel: ObservableObject {
             guard !Task.isCancelled else { return }
 
             await MainActor.run {
+                self.searchError = nil
                 self.isSearching = true
-                self.isSearchActive = true
+            }
+
+            // Save current threads before activating search mode
+            if !self.isSearchActive {
+                self.savedThreads = self.threads
             }
 
             do {
                 let (results, hasMore) = try await self.service.searchThreads(query: query, page: 1)
                 guard !Task.isCancelled else { return }
                 await MainActor.run {
-                    // Save current threads on first search activation
-                    if !self.isSearchActive {
-                        self.savedThreads = self.threads
-                    }
+                    self.isSearchActive = true
                     self.threads = results
                     self.searchPage = 1
                     self.searchCanLoadMore = hasMore
                     self.isSearching = false
+                    if results.isEmpty {
+                        self.searchError = "未找到相关结果"
+                    }
                 }
             } catch is CancellationError {
                 // Ignore
@@ -105,8 +111,16 @@ class ThreadListViewModel: ObservableObject {
                 guard !Task.isCancelled else { return }
                 await MainActor.run {
                     self.isSearching = false
+                    self.isSearchActive = true
                 }
-                AppLogger.debug("Search error: \(error)")
+                let nsError = error as NSError
+                let message = nsError.domain == "ZhihuService" && nsError.code == -1
+                    ? "搜索请求失败，请检查登录状态"
+                    : "搜索出错: \(error.localizedDescription)"
+                await MainActor.run {
+                    self.searchError = message
+                }
+                AppLogger.debug("[Zhihu] Search error: \(error)")
             }
         }
     }
@@ -142,6 +156,7 @@ class ThreadListViewModel: ObservableObject {
         isSearching = false
         searchCanLoadMore = false
         searchPage = 1
+        searchError = nil
         // Restore original threads
         if !savedThreads.isEmpty {
             threads = savedThreads

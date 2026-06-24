@@ -37,6 +37,32 @@ struct ThreadListView: View {
                         .padding(.bottom, 4)
                     }
 
+                    if let error = viewModel.searchError {
+                        HStack(spacing: 6) {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .font(.system(size: 12))
+                                .foregroundColor(.orange)
+                            Text(error)
+                                .font(.system(size: 13))
+                                .foregroundColor(.forumTextSecondary)
+                            Spacer()
+                        }
+                        .padding(.horizontal, 13)
+                        .padding(.vertical, 6)
+                        .background(Color.forumCard.opacity(0.6))
+                        .transition(.opacity)
+                    }
+
+                    if viewModel.isSearching && viewModel.threads.isEmpty {
+                        VStack(spacing: 12) {
+                            ProgressView()
+                            Text("搜索中...")
+                                .font(.system(size: 14))
+                                .foregroundColor(.forumTextSecondary)
+                        }
+                        .frame(maxWidth: .infinity, minHeight: 120)
+                    }
+
                     ScrollViewReader { scrollProxy in
                         ScrollView {
                             GeometryReader { geometry in
