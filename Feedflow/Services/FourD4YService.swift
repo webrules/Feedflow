@@ -1208,6 +1208,10 @@ class FourD4YService: ForumService {
 
     private func cleanThreadDetailTitle(_ html: String) -> String {
        var title = cleanContent(html).trimmingCharacters(in: .whitespacesAndNewlines)
+       title = title
+           .replacingOccurrences(of: "\\[LINK:[^\\]]+\\|([^\\]]+)\\]", with: "$1", options: .regularExpression)
+           .replacingOccurrences(of: "\\[IMAGE:[^\\]]+\\]", with: "", options: .regularExpression)
+           .trimmingCharacters(in: .whitespacesAndNewlines)
        if let suffixRange = title.range(of: " - ") {
            title = String(title[..<suffixRange.lowerBound])
        }
