@@ -479,34 +479,80 @@ class FourD4YService: ForumService {
         }
 
         let html = try await fetchContent(url: url)
-        let pattern = "href=\\\"viewthread\\.php\\?tid=(\\d+)[^\\\"]*\\\"[^>]*>(.*?)</a>"
-        let regex = try NSRegularExpression(pattern: pattern, options: [.caseInsensitive, .dotMatchesLineSeparators])
-        let matches = regex.matches(in: html, range: NSRange(html.startIndex..., in: html))
         let community = Community(id: "search", name: "Search", description: "", category: "4d4y", activeToday: 0, onlineNow: 0)
         var seenIDs = Set<String>()
+        var threads: [Thread] = []
 
-        let threads = matches.compactMap { match -> Thread? in
-            guard let idRange = Range(match.range(at: 1), in: html),
-                  let titleRange = Range(match.range(at: 2), in: html) else {
-                return nil
+        // 4D4Y search results are rendered as rows of:
+        //   <td class="list_user"><a href="space.php?uid=N" class="user"></a></td>
+        //   <td class="listcon"><p><a href="space.php?uid=N">name</a></p>
+        //     [<a ... class="classify">forum</a>]<a href="viewthread.php?tid=T" class="title">title</a></td>
+        // There is no <img> avatar, so build it from the author's uid.
+        let rowPattern = "class=\"list_user\"><a href=\"space\\.php\\?uid=(\\d+)\"[^>]*></a></td>\\s*<td class=\"listcon\">(.*?)</td>"
+        if let rowRegex = try? NSRegularExpression(pattern: rowPattern, options: [.caseInsensitive, .dotMatchesLineSeparators]) {
+            let rowMatches = rowRegex.matches(in: html, options: [], range: NSRange(html.startIndex..., in: html))
+            for match in rowMatches {
+                guard let uidRange = Range(match.range(at: 1), in: html),
+                      let listconRange = Range(match.range(at: 2), in: html) else { continue }
+                let uid = String(html[uidRange])
+                let listcon = String(html[listconRange])
+
+                guard let titleRegex = try? NSRegularExpression(pattern: "href=\"viewthread\\.php\\?tid=(\\d+)[^\"]*\"[^>]*class=\"title\"[^>]*>(.*?)</a>", options: [.caseInsensitive, .dotMatchesLineSeparators]),
+                      let titleMatch = titleRegex.firstMatch(in: listcon, options: [], range: NSRange(listcon.startIndex..., in: listcon)),
+                      let tidRange = Range(titleMatch.range(at: 1), in: listcon),
+                      let titleTextRange = Range(titleMatch.range(at: 2), in: listcon) else { continue }
+                let id = String(listcon[tidRange])
+                let title = cleanContent(String(listcon[titleTextRange]))
+                guard !title.isEmpty, seenIDs.insert(id).inserted else { continue }
+
+                var authorName = "Unknown"
+                if let nameRegex = try? NSRegularExpression(pattern: "<p>\\s*<a href=\"space\\.php\\?uid=\\d+\"[^>]*>(.*?)</a>", options: [.caseInsensitive, .dotMatchesLineSeparators]),
+                   let nameMatch = nameRegex.firstMatch(in: listcon, options: [], range: NSRange(listcon.startIndex..., in: listcon)),
+                   let nameTextRange = Range(nameMatch.range(at: 1), in: listcon) {
+                    let name = cleanContent(String(listcon[nameTextRange]))
+                    if !name.isEmpty { authorName = name }
+                }
+
+                threads.append(Thread(
+                    id: id,
+                    title: title,
+                    content: "",
+                    author: User(id: authorName, username: authorName, avatar: avatarURL(forUID: uid), role: nil),
+                    community: community,
+                    timeAgo: "",
+                    likeCount: 0,
+                    commentCount: 0,
+                    isLiked: false,
+                    tags: nil
+                ))
             }
+        }
 
-            let id = String(html[idRange])
-            let title = cleanContent(String(html[titleRange]))
-            guard !title.isEmpty, seenIDs.insert(id).inserted else { return nil }
-
-            return Thread(
-                id: id,
-                title: title,
-                content: "",
-                author: User(id: "", username: "Unknown", avatar: "person.circle", role: nil),
-                community: community,
-                timeAgo: "",
-                likeCount: 0,
-                commentCount: 0,
-                isLiked: false,
-                tags: nil
-            )
+        // Fallback: alternate markup without search rows — extract bare viewthread
+        // links (no author/avatar available in this path).
+        if threads.isEmpty {
+            let pattern = "href=\\\"viewthread\\.php\\?tid=(\\d+)[^\\\"]*\\\"[^>]*>(.*?)</a>"
+            let regex = try NSRegularExpression(pattern: pattern, options: [.caseInsensitive, .dotMatchesLineSeparators])
+            let matches = regex.matches(in: html, range: NSRange(html.startIndex..., in: html))
+            for match in matches {
+                guard let idRange = Range(match.range(at: 1), in: html),
+                      let titleRange = Range(match.range(at: 2), in: html) else { continue }
+                let id = String(html[idRange])
+                let title = cleanContent(String(html[titleRange]))
+                guard !title.isEmpty, seenIDs.insert(id).inserted else { continue }
+                threads.append(Thread(
+                    id: id,
+                    title: title,
+                    content: "",
+                    author: User(id: "", username: "Unknown", avatar: "person.circle", role: nil),
+                    community: community,
+                    timeAgo: "",
+                    likeCount: 0,
+                    commentCount: 0,
+                    isLiked: false,
+                    tags: nil
+                ))
+            }
         }
 
         AppLogger.debug("[4D4Y] Search returned \(threads.count) topics for \(query)")
@@ -557,17 +603,8 @@ class FourD4YService: ForumService {
                 title = String(rowContent[titleTextRange]).decodingHTMLEntities()
             }
 
-            // Extract author from <td class="author"><a>authorname</a> within this row
-            var authorName = "Unknown"
-            if let authorRegex = try? NSRegularExpression(pattern: "<td\\s+class=\"author\"[^>]*>.*?<a[^>]*>([^<]+)</a>", options: [.caseInsensitive, .dotMatchesLineSeparators]),
-               let authorMatch = authorRegex.firstMatch(in: rowContent, options: [], range: NSRange(rowContent.startIndex..., in: rowContent)),
-               let authorTextRange = Range(authorMatch.range(at: 1), in: rowContent) {
-                authorName = String(rowContent[authorTextRange]).trimmingCharacters(in: .whitespacesAndNewlines)
-            }
-            let authorAvatar = extractAvatarURL(from: rowContent)
-            let resolvedAuthorAvatar = isGenericAvatar(authorAvatar)
-                ? extractAvatarURLFromAuthorUid(in: rowContent)
-                : authorAvatar
+            // Extract author + resolved avatar from <td class="author"> within this row
+            let (authorName, resolvedAuthorAvatar) = extractAuthorAndAvatar(from: rowContent)
 
             // Extract reply count from <td class="nums"><strong>count</strong> within this row
             var replyCount = 0
@@ -634,6 +671,23 @@ class FourD4YService: ForumService {
         }
 
         return threads
+    }
+
+    /// Extracts the author name and a resolved avatar URL from a Discuz threadlist
+    /// row's `<td class="author">` cell. Falls back to building the avatar from the
+    /// author's uid when the markup only carries a generic/noavatar placeholder.
+    private func extractAuthorAndAvatar(from rowContent: String) -> (name: String, avatar: String) {
+        var authorName = "Unknown"
+        if let authorRegex = try? NSRegularExpression(pattern: "<td\\s+class=\"author\"[^>]*>.*?<a[^>]*>([^<]+)</a>", options: [.caseInsensitive, .dotMatchesLineSeparators]),
+           let authorMatch = authorRegex.firstMatch(in: rowContent, options: [], range: NSRange(rowContent.startIndex..., in: rowContent)),
+           let authorTextRange = Range(authorMatch.range(at: 1), in: rowContent) {
+            authorName = String(rowContent[authorTextRange]).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        let authorAvatar = extractAvatarURL(from: rowContent)
+        let resolvedAuthorAvatar = isGenericAvatar(authorAvatar)
+            ? extractAvatarURLFromAuthorUid(in: rowContent)
+            : authorAvatar
+        return (authorName, resolvedAuthorAvatar)
     }
 
     private func extractThreadLinksFallback(from html: String, community: Community) -> [Thread] {
