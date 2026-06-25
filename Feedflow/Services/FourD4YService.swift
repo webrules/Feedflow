@@ -1359,7 +1359,11 @@ class FourD4YService: ForumService {
             normalized == "person.circle" ||
             normalized == "person.circle.fill" ||
             normalized == "person.crop.circle" ||
-            normalized == "person.crop.circle.fill"
+            normalized == "person.crop.circle.fill" ||
+            // Discuz serves a "noavatar" placeholder in list/post markup even for
+            // users who have a real avatar. Treat it as generic so we fall through
+            // to building the avatar URL from the author's uid.
+            normalized.lowercased().contains("noavatar")
     }
 
     private func extractAvatarURL(from html: String) -> String {
