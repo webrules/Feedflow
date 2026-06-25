@@ -35,7 +35,9 @@ class ForumViewModel: ObservableObject {
 
         do {
             let fetchedCommunities = try await service.fetchCategories()
+            AppLogger.debug("[ForumVM] Fetched \(fetchedCommunities.count) communities: \(fetchedCommunities.map { "\($0.name)(fid=\($0.id))" }.joined(separator: ", "))")
             let resolvedCommunities = resolveCommunitiesAfterFetch(fetchedCommunities)
+            AppLogger.debug("[ForumVM] Resolved to \(resolvedCommunities.count) communities: \(resolvedCommunities.map { "\($0.name)(fid=\($0.id))" }.joined(separator: ", "))")
             self.communities = resolvedCommunities
             // Save to DB — DatabaseManager is not Sendable, so this must stay on the
             // MainActor. The dbQueue inside DatabaseManager makes it thread-safe,

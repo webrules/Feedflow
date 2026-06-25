@@ -119,7 +119,7 @@ extension SiteLoginConfig {
                 successURLPatterns: ["4d4y.com/forum/index.php", "4d4y.com/forum/forumdisplay", "4d4y.com/forum/viewthread", "4d4y.com/forum/"],
                 oauthOptions: [],
                 cookieDomain: "4d4y.com",
-                authCookieNameFragments: ["auth", "login", "member", "cdb_"]
+                authCookieNameFragments: ["cdb_auth", "cdb_member"]
             )
 
         case .hackerNews:
@@ -229,12 +229,12 @@ struct WebLoginView: UIViewRepresentable {
             // Clear the rejected signature on each new navigation so that a
             // previously-rejected cookie set does not block a fresh attempt.
 
-            let isSuccess = config.isSuccessURL(currentURL)
+            let isSuccess = config.isSuccessURL(currentURL) && !config.isLoginURL(webView.url)
             let isPostLoginNavigation = config.isPostLoginNavigation(webView.url)
 
             if isSuccess || isPostLoginNavigation {
                 checkCookiesWithRetry(webView: webView, retries: 8)
-            } else if config.shouldCheckCookies(for: webView.url) {
+            } else if config.shouldCheckCookies(for: webView.url) && !config.isLoginURL(webView.url) {
                 checkCookiesWithRetry(webView: webView, retries: 3)
             }
         }
@@ -299,36 +299,34 @@ struct WebLoginView: UIViewRepresentable {
         }
 
         func checkCookiesWithRetry(webView: WKWebView, retries: Int) {
-            guard !self.didReportSuccess, !self.isReportingSuccess else { return }
-
-            // Primary check: evaluate page content for logged-in indicators
-            // "Discovery" is a 4d4y category visible only to logged-in users
-            // "退出" (logout) is the universal Discuz logged-in indicator
-            webView.evaluateJavaScript("document.body.innerText") { result, error in
+            // Check page for logged-in indicators.
+            // "Discovery" (fid=2) only appears in the category list when
+            // logged in. The WAP mobile template renders logout as an icon
+            // (no text), and the logout page flashes before redirecting to
+            // index.php — so we use Discovery presence as the signal.
+            webView.evaluateJavaScript("(document.body||document.documentElement).textContent || ''") { result, _ in
                 guard !self.didReportSuccess, !self.isReportingSuccess else { return }
 
                 let pageText = (result as? String) ?? ""
-                let isLoggedIn = pageText.contains("Discovery") || pageText.contains("退出")
+                let isLoggedIn = pageText.contains("Discovery") || pageText.contains("退出") || pageText.contains("欢迎回来")
 
                 guard isLoggedIn else {
-                    AppLogger.debug("[WebLogin] Page content does not confirm login for \(self.config.site.makeService().id). Retries left: \(retries)")
+                    let preview = String(pageText.prefix(200)).replacingOccurrences(of: "\n", with: " ")
+                    AppLogger.debug("[WebLogin] Page not logged-in for \(self.config.site.makeService().id). Preview: \(preview). Retries left: \(retries)")
                     if retries > 0 {
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
                             self.checkCookiesWithRetry(webView: webView, retries: retries - 1)
                         }
                     }
                     return
                 }
 
-                AppLogger.debug("[WebLogin] Page content confirms login for \(self.config.site.makeService().id) (found logged-in indicator)")
-
-                // Grab all cookies from WKWebView and report success
+                // Page confirms login — grab all cookies
                 webView.configuration.websiteDataStore.httpCookieStore.getAllCookies { cookies in
                     guard !self.didReportSuccess, !self.isReportingSuccess else { return }
 
                     let siteCookies = self.config.siteCookies(from: cookies)
-
-                    AppLogger.debug("[WebLogin] Login confirmed, \(siteCookies.count) site cookies collected for \(self.config.site.makeService().id)")
+                    AppLogger.debug("[WebLogin] Login confirmed (page text) for \(self.config.site.makeService().id): \(siteCookies.count) cookies")
 
                     self.isReportingSuccess = true
                     Task {

@@ -8,6 +8,7 @@ enum AppLogger {
         #if DEBUG
         let value = message()
         logger.debug("\(value, privacy: .public)")
+        print("[Feedflow] \(value)")
         #endif
     }
 

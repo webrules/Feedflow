@@ -33,7 +33,7 @@ class FourD4YService: ForumService {
         let loginPageURL = URL(string: "\(baseURL)/logging.php?action=login")!
         var initialRequest = URLRequest(url: loginPageURL)
         initialRequest.httpMethod = "GET"
-        initialRequest.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36", forHTTPHeaderField: "User-Agent")
+        initialRequest.setValue("Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1", forHTTPHeaderField: "User-Agent")
 
         // Perform GET to obtain any required cookies (e.g., cf_clearance)
         let (_, _) = try await URLSession.shared.data(for: initialRequest)
@@ -57,7 +57,7 @@ class FourD4YService: ForumService {
         request.httpMethod = "POST"
         request.httpBody = postBody
         request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
-        request.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36", forHTTPHeaderField: "User-Agent")
+        request.setValue("Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1", forHTTPHeaderField: "User-Agent")
         // Include cookies from the GET request
         let cookieHeader = HTTPCookie.requestHeaderFields(with: loginPageCookies)
         request.allHTTPHeaderFields?.merge(cookieHeader) { (_, new) in new }
@@ -76,19 +76,23 @@ class FourD4YService: ForumService {
     var requiresLogin: Bool { true }
 
     func restoreSession() async -> Bool {
-        // Check WKWebView cookies first (fresh from WebLoginView)
+        // Check WKWebView cookies first (fresh from WebLoginView).
+        // We accept ANY 4d4y cookies — the page-content check in
+        // WebLoginView already verified the user is logged in.
+        // (cdb_sid alone is valid when user didn't check "remember me")
         let webCookies = fourD4YCookies(from: await webKitCookies(for: "4d4y.com"))
-        if !webCookies.isEmpty, hasDiscuzAuthenticationCookie(webCookies) {
-            AppLogger.debug("[4D4Y] WKWebView has \(webCookies.count) auth cookies — restoring session")
-            DatabaseManager.shared.replaceCookies(siteId: id, cookies: webCookies)
+        if !webCookies.isEmpty {
+            AppLogger.debug("[4D4Y] WKWebView has \(webCookies.count) cookies — restoring session")
+            let deduped = uniqueCookies(webCookies)
+            DatabaseManager.shared.replaceCookies(siteId: id, cookies: deduped)
             syncCookies(webCookies)
             return true
         }
 
         // Fall back to DB-persisted cookies
         let savedCookies = fourD4YCookies(from: DatabaseManager.shared.getCookies(siteId: id) ?? [])
-        if !savedCookies.isEmpty, hasDiscuzAuthenticationCookie(savedCookies) {
-            AppLogger.debug("[4D4Y] DB has \(savedCookies.count) auth cookies — restoring session")
+        if !savedCookies.isEmpty {
+            AppLogger.debug("[4D4Y] DB has \(savedCookies.count) cookies — restoring session")
             syncCookies(savedCookies)
             return true
         }
@@ -222,7 +226,7 @@ class FourD4YService: ForumService {
         }
 
         var request = URLRequest(url: url)
-        request.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36", forHTTPHeaderField: "User-Agent")
+        request.setValue("Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1", forHTTPHeaderField: "User-Agent")
         request.httpShouldHandleCookies = false
         request.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
         request.timeoutInterval = 10
@@ -282,7 +286,7 @@ class FourD4YService: ForumService {
         let relevant = fourD4YCookies(from: savedCookies)
 
         var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 30)
-        request.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36", forHTTPHeaderField: "User-Agent")
+        request.setValue("Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1", forHTTPHeaderField: "User-Agent")
         request.setValue("no-cache", forHTTPHeaderField: "Cache-Control")
         request.setValue("no-cache", forHTTPHeaderField: "Pragma")
         request.httpShouldHandleCookies = false
@@ -293,7 +297,9 @@ class FourD4YService: ForumService {
         // (HTTPCookieStorage automatic handling can silently drop cookies)
         if let cookieHeader = cookieHeader(for: url, cookies: relevant) {
             request.setValue(cookieHeader, forHTTPHeaderField: "Cookie")
-            AppLogger.debug("[4D4Y] Sending \(relevant.count) cookies manually")
+            AppLogger.debug("[4D4Y] fetchContent: sending \(relevant.count) cookies [\(relevant.map { $0.name }.joined(separator: ", "))]")
+        } else {
+            AppLogger.debug("[4D4Y] fetchContent: NO cookies to send (DB has \(savedCookies.count) total, \(relevant.count) 4d4y)")
         }
 
         let (data, response) = try await URLSession.shared.data(for: request)
@@ -418,7 +424,11 @@ class FourD4YService: ForumService {
         let range = NSRange(html.startIndex..., in: html)
         let matches = regex.matches(in: html, options: [], range: range)
 
-        AppLogger.debug("[4D4Y] Found \(matches.count) forum matches")
+        let forumNames = matches.compactMap { m -> String? in
+            guard let nr = Range(m.range(at: 2), in: html) else { return nil }
+            return String(html[nr])
+        }
+        AppLogger.debug("[4D4Y] Found \(matches.count) forum matches: \(forumNames.joined(separator: ", "))")
 
         for match in matches {
             if let fidRange = Range(match.range(at: 1), in: html),
@@ -526,7 +536,76 @@ class FourD4YService: ForumService {
         let threadMatches = threadRowRegex.matches(in: html, options: [], range: NSRange(html.startIndex..., in: html))
 
         AppLogger.debug("[4D4Y] Fetching threads from: \(url)")
-        AppLogger.debug("[4D4Y] Found \(threadMatches.count) thread rows")
+        AppLogger.debug("[4D4Y] Found \(threadMatches.count) thread rows via tbody pattern")
+
+        // If the tbody pattern found nothing, the WAP mobile template is active.
+        // Fall back to extracting threads from viewthread.php links directly.
+        if threadMatches.isEmpty {
+            let viewthreadPattern = "href=\"viewthread\\.php\\?tid=(\\d+)[^\"]*\"[^>]*>(.*?)</a>"
+            if let vtRegex = try? NSRegularExpression(pattern: viewthreadPattern, options: [.caseInsensitive, .dotMatchesLineSeparators]) {
+                let vtMatches = vtRegex.matches(in: html, options: [], range: NSRange(html.startIndex..., in: html))
+                AppLogger.debug("[4D4Y] WAP fallback: Found \(vtMatches.count) viewthread links")
+
+                for vtMatch in vtMatches {
+                    guard let tidRange = Range(vtMatch.range(at: 1), in: html),
+                          let titleRange = Range(vtMatch.range(at: 2), in: html) else { continue }
+                    let tid = String(html[tidRange])
+                    let rawTitle = String(html[titleRange])
+                    let title = rawTitle.replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression).trimmingCharacters(in: .whitespacesAndNewlines).decodingHTMLEntities()
+
+                    // Try to extract author from nearby elements
+                    var authorName = "Unknown"
+                    // Look for <cite> or author class after the link
+                    let linkEnd = vtMatch.range.location + vtMatch.range.length
+                    let afterEnd = min(linkEnd + 500, html.count)
+                    if afterEnd > linkEnd, let afterRange = Range(NSRange(location: linkEnd, length: afterEnd - linkEnd), in: html) {
+                        let after = String(html[afterRange])
+                        if let authorMatch = try? NSRegularExpression(pattern: "<cite>.*?<a[^>]*>([^<]+)</a>", options: [.caseInsensitive, .dotMatchesLineSeparators]).firstMatch(in: after, options: [], range: NSRange(after.startIndex..., in: after)),
+                           let aRange = Range(authorMatch.range(at: 1), in: after) {
+                            authorName = String(after[aRange]).trimmingCharacters(in: .whitespacesAndNewlines)
+                        } else if let altAuthorMatch = try? NSRegularExpression(pattern: "作者[：:]\\s*<a[^>]*>([^<]+)</a>", options: .caseInsensitive).firstMatch(in: after, options: [], range: NSRange(after.startIndex..., in: after)),
+                                  let aRange = Range(altAuthorMatch.range(at: 1), in: after) {
+                            authorName = String(after[aRange]).trimmingCharacters(in: .whitespacesAndNewlines)
+                        }
+                    }
+
+                    // Try to extract reply count
+                    var replyCount = 0
+                    if afterEnd > linkEnd, let afterRange = Range(NSRange(location: linkEnd, length: min(500, html.count - linkEnd)), in: html) {
+                        let after = String(html[afterRange])
+                        if let replyMatch = try? NSRegularExpression(pattern: "(\\d+)\\s*回复", options: .caseInsensitive).firstMatch(in: after, options: [], range: NSRange(after.startIndex..., in: after)),
+                           let rRange = Range(replyMatch.range(at: 1), in: after),
+                           let count = Int(String(after[rRange])) {
+                            replyCount = count
+                        }
+                    }
+
+                    if !threads.contains(where: { $0.id == tid }) {
+                        threads.append(Thread(
+                            id: tid,
+                            title: title,
+                            content: "",
+                            author: User(id: authorName, username: authorName, avatar: "", role: nil),
+                            community: community,
+                            timeAgo: "",
+                            likeCount: 0,
+                            commentCount: replyCount,
+                            isLiked: false,
+                            tags: nil,
+                            lastPostTime: nil,
+                            lastPosterName: nil
+                        ))
+                    }
+                }
+            }
+        }
+
+        if threadMatches.isEmpty && threads.isEmpty {
+            AppLogger.debug("[4D4Y] No threads found. Attempting auto-login and retry...")
+            if retryCount == 0, try await performAutoLogin() {
+                return try await fetchCategoryThreadsInternal(categoryId: categoryId, communities: communities, page: page, retryCount: 1)
+            }
+        }
 
         for (index, threadMatch) in threadMatches.enumerated() {
             guard let tidRange = Range(threadMatch.range(at: 1), in: html),
@@ -1123,7 +1202,7 @@ class FourD4YService: ForumService {
 
         // Comprehensive headers to mimic a browser AJAX request
         request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
-        request.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36", forHTTPHeaderField: "User-Agent")
+        request.setValue("Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1", forHTTPHeaderField: "User-Agent")
         request.setValue("text/xml, */*", forHTTPHeaderField: "Accept")
         request.setValue("XMLHttpRequest", forHTTPHeaderField: "X-Requested-With")
         request.setValue("\(baseURL)/viewthread.php?tid=\(topicId)", forHTTPHeaderField: "Referer")
@@ -1223,7 +1302,7 @@ class FourD4YService: ForumService {
         request.httpMethod = "POST"
         request.httpBody = bodyData
         request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
-        request.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36", forHTTPHeaderField: "User-Agent")
+        request.setValue("Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1", forHTTPHeaderField: "User-Agent")
         request.setValue("text/xml, */*", forHTTPHeaderField: "Accept")
         request.setValue("XMLHttpRequest", forHTTPHeaderField: "X-Requested-With")
 

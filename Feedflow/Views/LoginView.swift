@@ -328,10 +328,15 @@ struct LoginView: View {
             return false
         }
 
-        guard isAuthenticatedCookieSet(site: site, cookies: relevantCookies) else {
-            AppLogger.debug("[Login] Cookie set for \(siteId) is missing an authentication cookie; leaving existing session unchanged.")
-            loginStatus[siteId] = DatabaseManager.shared.hasCookies(siteId: siteId)
-            return false
+        // For 4d4y: navigation to a success URL IS proof of login (Discuz only
+        // redirects from logging.php on successful auth). Cookie-name checks
+        // fail when user doesn't check "remember me" (no cdb_auth cookie).
+        if site != .fourD4Y {
+            guard isAuthenticatedCookieSet(site: site, cookies: relevantCookies) else {
+                AppLogger.debug("[Login] Cookie set for \(siteId) is missing an authentication cookie; leaving existing session unchanged.")
+                loginStatus[siteId] = DatabaseManager.shared.hasCookies(siteId: siteId)
+                return false
+            }
         }
 
         // Critical check for Zhihu authentication token
@@ -348,7 +353,10 @@ struct LoginView: View {
             return HTTPCookie(properties: props) ?? cookie
         }
 
-        DatabaseManager.shared.replaceCookies(siteId: siteId, cookies: persistentCookies)
+        // De-duplicate cookies by name|domain|path, keeping the last (latest) value
+        let dedupedCookies = persistentCookies.dedupedByName()
+        AppLogger.debug("[Login] Deduped: \(persistentCookies.count) → \(dedupedCookies.count) cookies for \(siteId)")
+        DatabaseManager.shared.replaceCookies(siteId: siteId, cookies: dedupedCookies)
 
         // Invalidate stale topic caches so the next fetch returns logged-in content
         // instead of showing threads that were cached during a guest session.
@@ -358,7 +366,7 @@ struct LoginView: View {
         let verified = DatabaseManager.shared.getCookies(siteId: siteId) ?? []
         AppLogger.debug("[Login] Verification: \(verified.count) cookies readable from DB for \(siteId)")
 
-        replaceRuntimeCookies(domainFilter: domainFilter, cookies: persistentCookies)
+        replaceRuntimeCookies(domainFilter: domainFilter, cookies: dedupedCookies)
 
         // Skip HTTP-based restoreSession verification — login was already confirmed
         // by the WebLoginView page-content check (e.g., "Discovery" on 4d4y /forum/)
@@ -479,3 +487,18 @@ struct LoginView: View {
         }
     }
 }
+
+// MARK: - Cookie Deduplication
+
+extension Array where Element == HTTPCookie {
+    /// Returns cookies deduplicated by name|domain|path, keeping the last occurrence
+    func dedupedByName() -> [HTTPCookie] {
+        var seen: [String: HTTPCookie] = [:]
+        for cookie in self {
+            let key = "\(cookie.name)|\(cookie.domain)|\(cookie.path)"
+            seen[key] = cookie
+        }
+        return Array(seen.values)
+    }
+}
+
