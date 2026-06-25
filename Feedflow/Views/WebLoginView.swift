@@ -116,10 +116,10 @@ extension SiteLoginConfig {
             return SiteLoginConfig(
                 site: .fourD4Y,
                 loginURL: "https://www.4d4y.com/forum/logging.php?action=login",
-                successURLPatterns: ["4d4y.com/forum/index.php", "4d4y.com/forum/forumdisplay", "4d4y.com/forum/viewthread"],
+                successURLPatterns: ["4d4y.com/forum/index.php", "4d4y.com/forum/forumdisplay", "4d4y.com/forum/viewthread", "4d4y.com/forum/"],
                 oauthOptions: [],
                 cookieDomain: "4d4y.com",
-                authCookieNameFragments: ["auth", "login", "member"]
+                authCookieNameFragments: ["auth", "login", "member", "cdb_"]
             )
 
         case .hackerNews:
@@ -216,7 +216,6 @@ struct WebLoginView: UIViewRepresentable {
         let onLoginSuccess: ([HTTPCookie]) async -> Bool
         private var didReportSuccess = false
         private var isReportingSuccess = false
-        private var lastRejectedCookieSignature: String?
 
         init(config: SiteLoginConfig, onLoginSuccess: @escaping ([HTTPCookie]) async -> Bool) {
             self.config = config
@@ -229,7 +228,6 @@ struct WebLoginView: UIViewRepresentable {
 
             // Clear the rejected signature on each new navigation so that a
             // previously-rejected cookie set does not block a fresh attempt.
-            lastRejectedCookieSignature = nil
 
             let isSuccess = config.isSuccessURL(currentURL)
             let isPostLoginNavigation = config.isPostLoginNavigation(webView.url)
@@ -301,48 +299,47 @@ struct WebLoginView: UIViewRepresentable {
         }
 
         func checkCookiesWithRetry(webView: WKWebView, retries: Int) {
-            webView.configuration.websiteDataStore.httpCookieStore.getAllCookies { cookies in
+            guard !self.didReportSuccess, !self.isReportingSuccess else { return }
+
+            // Primary check: evaluate page content for logged-in indicators
+            // "Discovery" is a 4d4y category visible only to logged-in users
+            // "退出" (logout) is the universal Discuz logged-in indicator
+            webView.evaluateJavaScript("document.body.innerText") { result, error in
                 guard !self.didReportSuccess, !self.isReportingSuccess else { return }
 
-                guard self.config.hasAuthenticatedSession(in: cookies) else {
-                    AppLogger.debug("[WebLogin] Authenticated cookie is missing. Retries left: \(retries)")
+                let pageText = (result as? String) ?? ""
+                let isLoggedIn = pageText.contains("Discovery") || pageText.contains("退出")
+
+                guard isLoggedIn else {
+                    AppLogger.debug("[WebLogin] Page content does not confirm login for \(self.config.site.makeService().id). Retries left: \(retries)")
                     if retries > 0 {
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
                             self.checkCookiesWithRetry(webView: webView, retries: retries - 1)
                         }
                     }
                     return
                 }
 
-                let siteCookies = self.config.siteCookies(from: cookies)
-                let cookieSignature = self.cookieSignature(for: siteCookies)
-                guard self.lastRejectedCookieSignature != cookieSignature else {
-                    AppLogger.debug("[WebLogin] Skipping previously rejected cookie set for \(self.config.site.makeService().id)")
-                    return
-                }
+                AppLogger.debug("[WebLogin] Page content confirms login for \(self.config.site.makeService().id) (found logged-in indicator)")
 
-                AppLogger.debug("[WebLogin] Authenticated session detected for \(self.config.site.makeService().id): \(siteCookies.count) cookies")
+                // Grab all cookies from WKWebView and report success
+                webView.configuration.websiteDataStore.httpCookieStore.getAllCookies { cookies in
+                    guard !self.didReportSuccess, !self.isReportingSuccess else { return }
 
-                self.isReportingSuccess = true
-                Task {
-                    let wasAccepted = await self.onLoginSuccess(siteCookies)
-                    DispatchQueue.main.async {
-                        self.isReportingSuccess = false
-                        self.didReportSuccess = wasAccepted
+                    let siteCookies = self.config.siteCookies(from: cookies)
 
-                        if !wasAccepted {
-                            self.lastRejectedCookieSignature = cookieSignature
+                    AppLogger.debug("[WebLogin] Login confirmed, \(siteCookies.count) site cookies collected for \(self.config.site.makeService().id)")
+
+                    self.isReportingSuccess = true
+                    Task {
+                        let wasAccepted = await self.onLoginSuccess(siteCookies)
+                        DispatchQueue.main.async {
+                            self.isReportingSuccess = false
+                            self.didReportSuccess = wasAccepted
                         }
                     }
                 }
             }
-        }
-
-        private func cookieSignature(for cookies: [HTTPCookie]) -> String {
-            cookies
-                .map { "\($0.domain)|\($0.path)|\($0.name)|\($0.value)" }
-                .sorted()
-                .joined(separator: "\\n")
         }
     }
 }

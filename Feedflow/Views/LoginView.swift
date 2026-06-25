@@ -360,14 +360,10 @@ struct LoginView: View {
 
         replaceRuntimeCookies(domainFilter: domainFilter, cookies: persistentCookies)
 
-        let sessionValid = await site.makeService().restoreSession()
-        loginStatus[siteId] = sessionValid
-
-        if !sessionValid {
-            AppLogger.debug("[Login] WARNING: Session verification FAILED after login for \(siteId)")
-            isCompletingLogin = false
-            return false
-        }
+        // Skip HTTP-based restoreSession verification — login was already confirmed
+        // by the WebLoginView page-content check (e.g., "Discovery" on 4d4y /forum/)
+        loginStatus[siteId] = true
+        AppLogger.debug("[Login] Login accepted for \(siteId) — cookies saved, page content verified")
 
         guard !isCompletingLogin else { return true }
         isCompletingLogin = true

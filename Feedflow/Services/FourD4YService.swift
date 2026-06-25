@@ -76,27 +76,21 @@ class FourD4YService: ForumService {
     var requiresLogin: Bool { true }
 
     func restoreSession() async -> Bool {
-        let savedCookies = fourD4YCookies(from: DatabaseManager.shared.getCookies(siteId: id) ?? [])
-
-        if !savedCookies.isEmpty {
-            if await validateSession(cookies: savedCookies) {
-                syncCookies(savedCookies)
-                return true
-            }
-            AppLogger.debug("[4D4Y] Saved cookies did not pass the HTML check; preserving them while checking WKWebView")
+        // Check WKWebView cookies first (fresh from WebLoginView)
+        let webCookies = fourD4YCookies(from: await webKitCookies(for: "4d4y.com"))
+        if !webCookies.isEmpty, hasDiscuzAuthenticationCookie(webCookies) {
+            AppLogger.debug("[4D4Y] WKWebView has \(webCookies.count) auth cookies — restoring session")
+            DatabaseManager.shared.replaceCookies(siteId: id, cookies: webCookies)
+            syncCookies(webCookies)
+            return true
         }
 
-        let webCookies = fourD4YCookies(from: await webKitCookies(for: "4d4y.com"))
-        if !webCookies.isEmpty {
-            AppLogger.debug("[4D4Y] Checking \(webCookies.count) 4d4y cookies from WKWebView")
-
-            if await validateSession(cookies: webCookies) {
-                DatabaseManager.shared.replaceCookies(siteId: id, cookies: webCookies)
-                syncCookies(webCookies)
-                return true
-            }
-
-            AppLogger.debug("[4D4Y] WKWebView cookies were not authenticated; keeping stored cookies unchanged")
+        // Fall back to DB-persisted cookies
+        let savedCookies = fourD4YCookies(from: DatabaseManager.shared.getCookies(siteId: id) ?? [])
+        if !savedCookies.isEmpty, hasDiscuzAuthenticationCookie(savedCookies) {
+            AppLogger.debug("[4D4Y] DB has \(savedCookies.count) auth cookies — restoring session")
+            syncCookies(savedCookies)
+            return true
         }
 
         // No cookies — attempt auto-login with saved credentials
@@ -104,7 +98,6 @@ class FourD4YService: ForumService {
             return true
         }
 
-        // No cookies and no saved credentials — login needed
         return false
     }
 
@@ -231,13 +224,22 @@ class FourD4YService: ForumService {
         var request = URLRequest(url: url)
         request.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36", forHTTPHeaderField: "User-Agent")
         request.httpShouldHandleCookies = false
+        request.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+        request.timeoutInterval = 10
         if let cookieHeader = cookieHeader(for: url, cookies: cookies) {
             request.setValue(cookieHeader, forHTTPHeaderField: "Cookie")
+            AppLogger.debug("[4D4Y DEBUG] validateSession: sending \(cookies.count) cookies, header length=\(cookieHeader.count)")
+        } else {
+            AppLogger.debug("[4D4Y DEBUG] validateSession: cookieHeader returned nil for \(cookies.count) input cookies")
         }
 
         do {
-            let (data, _) = try await URLSession.shared.data(for: request)
+            let (data, response) = try await URLSession.shared.data(for: request)
+            if let httpResponse = response as? HTTPURLResponse {
+                AppLogger.debug("[4D4Y DEBUG] validateSession HTTP \(httpResponse.statusCode) for \(httpResponse.url?.absoluteString ?? "?")")
+            }
             let html = String(data: data, encoding: gbkEncoding) ?? String(decoding: data, as: UTF8.self)
+            AppLogger.debug("[4D4Y DEBUG] validateSession HTML length: \(html.count), gbk decoding: \(String(data: data, encoding: gbkEncoding) != nil)")
             let pattern = "href=\"forumdisplay\\.php\\?fid=(\\d+)[^\"]*\"[^>]*>([^<]+)</a>"
             let regex = try NSRegularExpression(pattern: pattern, options: .caseInsensitive)
             let matches = regex.matches(in: html, options: [], range: NSRange(html.startIndex..., in: html))
@@ -254,14 +256,17 @@ class FourD4YService: ForumService {
                 AppLogger.debug("[4D4Y DEBUG] Session validation succeeded: forums=\(matches.count) (logout link ✓) → \(forumNames.joined(separator: ", "))")
                 // Extract SID/formHash from the validation response so the service
                 // instance is fully initialized for subsequent requests (e.g. posting).
-                extractSID(from: html)
+                // extractSID(from: html)
             } else {
-                AppLogger.debug("[4D4Y] Session validation failed: no forumdisplay links found")
+                AppLogger.debug("[4D4Y] Session validation FAILED: forums=\(matches.count) logout=\(hasLogoutLink) login=\(hasLoginLink) actionLogin=\(html.contains("action=login")) actionLogout=\(html.contains("action=logout"))")
+                let snippet = String(html.prefix(500))
+                AppLogger.debug("[4D4Y DEBUG] HTML snippet: \(snippet)")
             }
 
             return isLoggedIn
         } catch {
-            AppLogger.debug("[4D4Y] Session validation error: \(error)")
+            AppLogger.debug("[4D4Y] Session validation error: \(error.localizedDescription)")
+            AppLogger.debug("[4D4Y DEBUG] Session validation NSError domain=\( (error as NSError).domain ) code=\( (error as NSError).code )")
             return false
         }
     }
@@ -281,6 +286,8 @@ class FourD4YService: ForumService {
         request.setValue("no-cache", forHTTPHeaderField: "Cache-Control")
         request.setValue("no-cache", forHTTPHeaderField: "Pragma")
         request.httpShouldHandleCookies = false
+        request.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+        request.timeoutInterval = 10
 
         // Manually set cookies in the request header to guarantee they're sent
         // (HTTPCookieStorage automatic handling can silently drop cookies)
@@ -289,7 +296,10 @@ class FourD4YService: ForumService {
             AppLogger.debug("[4D4Y] Sending \(relevant.count) cookies manually")
         }
 
-        let (data, _) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await URLSession.shared.data(for: request)
+            if let httpResponse = response as? HTTPURLResponse {
+                AppLogger.debug("[4D4Y DEBUG] validateSession HTTP \(httpResponse.statusCode) for \(httpResponse.url?.absoluteString ?? "?")")
+            }
 
 
         // Try GBK decode first
@@ -304,7 +314,7 @@ class FourD4YService: ForumService {
         // currentSID with guest/challenge SIDs.
         let isLoggedInPage = html.contains("action=logout") || html.contains("退出")
         if isLoggedInPage {
-            extractSID(from: html)
+            // extractSID(from: html)
         }
 
         // DEBUG: Log login state indicators from the response HTML
@@ -394,7 +404,7 @@ class FourD4YService: ForumService {
         let html = try await fetchContent(url: url)
         AppLogger.debug("[4D4Y] Index fetched. Length: \(html.count)")
 
-        extractSID(from: html)
+        // extractSID(from: html)
 
         var communities: [Community] = []
 
@@ -600,7 +610,7 @@ class FourD4YService: ForumService {
             AppLogger.debug("[4D4Y] No threads found. Attempting auto-login and retry...")
             if try await performAutoLogin() {
                 // Clear SID to force refresh after login
-                self.currentSID = nil
+                // self.currentSID = nil
                 return try await fetchCategoryThreadsInternal(categoryId: categoryId, communities: communities, page: page, retryCount: 1)
             }
         }
@@ -625,14 +635,14 @@ class FourD4YService: ForumService {
             let sessionCookies = uniqueCookies(fourD4YCookies(from: cookies + systemCookies))
 
             if !sessionCookies.isEmpty,
-               await validateSession(cookies: sessionCookies) {
+               hasDiscuzAuthenticationCookie(sessionCookies) {
                 DatabaseManager.shared.replaceCookies(siteId: id, cookies: sessionCookies)
                 syncCookies(sessionCookies)
                 AppLogger.debug("[4D4Y] Auto-login successful.")
                 return true
             }
 
-            AppLogger.debug("[4D4Y] Auto-login did not produce a validated auth cookie set.")
+            AppLogger.debug("[4D4Y] Auto-login did not produce a valid auth cookie.")
         } catch {
             AppLogger.debug("[4D4Y] Auto-login failed: \(error)")
         }
@@ -789,7 +799,7 @@ class FourD4YService: ForumService {
              if page == 1 && retryCount == 0 {
                  AppLogger.debug("[4D4Y] No content found in thread detail. Attempting auto-login and retry...")
                  if try await performAutoLogin() {
-                     self.currentSID = nil
+                     // self.currentSID = nil
                      return try await fetchThreadDetailInternal(threadId: threadId, page: page, retryCount: 1)
                  }
              }
@@ -1052,8 +1062,8 @@ class FourD4YService: ForumService {
                 AppLogger.debug("[4D4Y] Auth error detected during reply. Attempting auto-login...")
                 if try await performAutoLogin() {
                     // Reset session identifiers to force fresh ones during retry
-                    self.currentSID = nil
-                    self.currentFormHash = nil
+                    // self.currentSID = nil
+                    // self.currentFormHash = nil
 
                     AppLogger.debug("[4D4Y] Retrying reply after auto-login...")
                     try await postCommentInternal(topicId: topicId, categoryId: categoryId, content: content)
