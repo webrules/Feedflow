@@ -388,7 +388,7 @@ struct ThreadRow: View {
                 AvatarView(urlOrName: thread.author.avatar, size: 40, fallbackText: thread.author.username)
             }
             VStack(alignment: .leading, spacing: 9) {
-                if !["zhihu", "hackernews"].contains(service.id) {
+                if shouldShowBadgeRow {
                     badgeRow
                 }
 
@@ -438,6 +438,10 @@ struct ThreadRow: View {
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .stroke(Color.forumSeparator.opacity(0.62), lineWidth: 1)
         )
+    }
+
+    var shouldShowBadgeRow: Bool {
+        !isRSS && !["zhihu", "hackernews"].contains(service.id)
     }
 
     private var compactMeta: Bool {

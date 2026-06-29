@@ -28,15 +28,21 @@ struct FullScreenImageView: View {
                          .rotationEffect(.degrees(rotation))
                          .scaleEffect(scale)
                          .offset(offset)
-                         .gesture(panGesture)
-                         .gesture(zoomGesture)
+                         .contentShape(Rectangle())
+                         .simultaneousGesture(panGesture)
+                         .simultaneousGesture(zoomGesture)
                          .onTapGesture(count: 2) {
                              withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
-                                 if scale > minScale {
+                                 let targetScale = Self.scaleAfterDoubleTap(
+                                     currentScale: scale,
+                                     minScale: minScale,
+                                     zoomScale: 2.5
+                                 )
+                                 if targetScale == minScale {
                                      resetZoom()
                                  } else {
-                                     scale = 2.5
-                                     lastScale = 2.5
+                                     scale = targetScale
+                                     lastScale = targetScale
                                  }
                              }
                          }
@@ -119,13 +125,35 @@ struct FullScreenImageView: View {
         Swift.min(Swift.max(value, minScale), maxScale)
     }
 
+    static func scaleAfterDoubleTap(
+        currentScale: CGFloat,
+        minScale: CGFloat,
+        zoomScale: CGFloat
+    ) -> CGFloat {
+        currentScale > minScale ? minScale : zoomScale
+    }
+
+    static func offsetAfterDrag(
+        lastOffset: CGSize,
+        translation: CGSize,
+        scale: CGFloat,
+        minScale: CGFloat
+    ) -> CGSize {
+        guard scale > minScale else { return lastOffset }
+        return CGSize(
+            width: lastOffset.width + translation.width,
+            height: lastOffset.height + translation.height
+        )
+    }
+
     private var panGesture: some Gesture {
         DragGesture()
             .onChanged { value in
-                guard scale > minScale else { return }
-                offset = CGSize(
-                    width: lastOffset.width + value.translation.width,
-                    height: lastOffset.height + value.translation.height
+                offset = Self.offsetAfterDrag(
+                    lastOffset: lastOffset,
+                    translation: value.translation,
+                    scale: scale,
+                    minScale: minScale
                 )
             }
             .onEnded { _ in

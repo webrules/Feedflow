@@ -134,6 +134,8 @@ final class ContentBrowsingTests: XCTestCase {
         let k = "background_prefetch_enabled"
         let p = UserDefaults.standard.object(forKey: k)
         defer { if let p { UserDefaults.standard.set(p, forKey: k) } else { UserDefaults.standard.removeObject(forKey: k) } }
+        UserDefaults.standard.removeObject(forKey: k)
+        XCTAssertTrue(ThreadListViewModel(service: HackerNewsService()).allowsConfiguredBackgroundPrefetch)
         UserDefaults.standard.set(false, forKey: k)
         XCTAssertFalse(ThreadListViewModel(service: HackerNewsService()).allowsConfiguredBackgroundPrefetch)
         UserDefaults.standard.set(true, forKey: k)
@@ -141,6 +143,35 @@ final class ContentBrowsingTests: XCTestCase {
         // All real services are in the allowlist — verify with an id that is not listed.
         let unknown = StubUnknownService()
         XCTAssertFalse(ThreadListViewModel(service: unknown).allowsConfiguredBackgroundPrefetch)
+    }
+
+    @MainActor func testBackgroundPrefetchRunsWhenNotOnWiFi() async {
+        let key = ThreadListViewModel.backgroundPrefetchEnabledKey
+        let previousSetting = UserDefaults.standard.object(forKey: key)
+        let previousWiFi = NetworkMonitor.shared.isWiFi
+        defer {
+            if let previousSetting {
+                UserDefaults.standard.set(previousSetting, forKey: key)
+            } else {
+                UserDefaults.standard.removeObject(forKey: key)
+            }
+            NetworkMonitor.shared.isWiFi = previousWiFi
+        }
+
+        UserDefaults.standard.removeObject(forKey: key)
+        NetworkMonitor.shared.isWiFi = false
+
+        let service = PrefetchTrackingService()
+        let vm = ThreadListViewModel(service: service)
+        let thread = makeThread(id: "prefetch-\(UUID().uuidString)", title: "Prefetch")
+
+        vm.prefetchThread(thread: thread)
+
+        for _ in 0..<20 where service.fetchDetailCallCount == 0 {
+            try? await Task.sleep(nanoseconds: 100_000_000)
+        }
+
+        XCTAssertEqual(service.fetchDetailCallCount, 1)
     }
 }
 
@@ -398,7 +429,7 @@ final class EncryptionTests: XCTestCase {
     func testDiscourseProps() { let s = DiscourseService(); XCTAssertEqual(s.name, "Linux.do"); XCTAssertEqual(s.id, "linux_do"); XCTAssertTrue(s.requiresLogin) }
     func testHNProps() { let s = HackerNewsService(); XCTAssertEqual(s.name, "Hacker News"); XCTAssertEqual(s.id, "hackernews"); XCTAssertFalse(s.requiresLogin) }
     func testZhihuProps() { let s = ZhihuService(); XCTAssertEqual(s.name, "知乎"); XCTAssertEqual(s.id, "zhihu"); XCTAssertTrue(s.requiresLogin) }
-    func testRSSProps() { let s = RSSService(); XCTAssertEqual(s.name, "RSS"); XCTAssertEqual(s.id, "rss"); XCTAssertFalse(s.requiresLogin) }
+    func testRSSProps() { let s = RSSService(); XCTAssertEqual(s.name, "RSS Feeds"); XCTAssertEqual(s.id, "rss"); XCTAssertFalse(s.requiresLogin) }
     func testTimeAgoJustNow() { XCTAssertEqual(FourD4YService().calculateTimeAgo(from: Date()), "just now") }
     func testTimeAgoMinutes() { XCTAssertEqual(FourD4YService().calculateTimeAgo(from: Date().addingTimeInterval(-120)), "2m") }
     func testTimeAgoHours() { XCTAssertEqual(FourD4YService().calculateTimeAgo(from: Date().addingTimeInterval(-7200)), "2h") }
@@ -529,6 +560,25 @@ private final class StubUnknownService: ForumService {
     func fetchCategories() async throws -> [Community] { [] }
     func fetchCategoryThreads(categoryId: String, communities: [Community], page: Int) async throws -> [FeedThread] { [] }
     func fetchThreadDetail(threadId: String, page: Int) async throws -> (FeedThread, [Comment], Int?) { (FeedThread(id: "1", title: "", content: "", author: User(id: "", username: "", avatar: "", role: nil), community: Community(id: "", name: "", description: "", category: "", activeToday: 0, onlineNow: 0), timeAgo: "", likeCount: 0, commentCount: 0), [], nil) }
+    func postComment(topicId: String, categoryId: String, content: String) async throws {}
+    func createThread(categoryId: String, title: String, content: String) async throws {}
+    func getWebURL(for thread: FeedThread) -> String { "" }
+    func canCreateThread(in community: Community) -> Bool { false }
+}
+
+private final class PrefetchTrackingService: ForumService {
+    var name: String { "Prefetch Tracking" }
+    var id: String { "hackernews" }
+    var logo: String { "tray.and.arrow.down" }
+    private(set) var fetchDetailCallCount = 0
+
+    func restoreSession() async -> Bool { true }
+    func fetchCategories() async throws -> [Community] { [] }
+    func fetchCategoryThreads(categoryId: String, communities: [Community], page: Int) async throws -> [FeedThread] { [] }
+    func fetchThreadDetail(threadId: String, page: Int) async throws -> (FeedThread, [Comment], Int?) {
+        fetchDetailCallCount += 1
+        return (makeThread(id: threadId, title: "Fetched"), [], nil)
+    }
     func postComment(topicId: String, categoryId: String, content: String) async throws {}
     func createThread(categoryId: String, title: String, content: String) async throws {}
     func getWebURL(for thread: FeedThread) -> String { "" }

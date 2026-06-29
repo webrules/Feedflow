@@ -472,7 +472,41 @@ final class RSSFeedExtendedTests: XCTestCase {
     @MainActor func testRSSServiceProperties() {
         let service = RSSService()
         XCTAssertFalse(service.logo.isEmpty)
-        XCTAssertEqual(service.name, "RSS")
+        XCTAssertEqual(service.name, "RSS Feeds")
+    }
+
+    @MainActor func testRSSThreadRowHidesTopBadgeLine() {
+        let community = Community(
+            id: "feed",
+            name: "Example Feed",
+            description: "",
+            category: "RSS",
+            activeToday: 0,
+            onlineNow: 0
+        )
+        let row = ThreadRow(
+            thread: makeTestThread(id: "rss-1", title: "RSS item", community: community),
+            service: RSSService()
+        )
+
+        XCTAssertFalse(row.shouldShowBadgeRow)
+    }
+
+    func testForumThreadRowKeepsTopMetadataLine() {
+        let community = Community(
+            id: "forum",
+            name: "Forum",
+            description: "",
+            category: "Forum",
+            activeToday: 0,
+            onlineNow: 0
+        )
+        let row = ThreadRow(
+            thread: makeTestThread(id: "forum-1", title: "Forum thread", community: community),
+            service: FourD4YService()
+        )
+
+        XCTAssertTrue(row.shouldShowBadgeRow)
     }
 }
 
@@ -723,6 +757,66 @@ final class PerSiteServiceTests: XCTestCase {
         let avatarURL = service.avatarURL(forUID: uid)
         XCTAssertTrue(avatarURL.contains("000/07/77/77_avatar_middle.jpg"),
                       "Avatar URL should be correctly constructed from extracted UID. Got: \(avatarURL)")
+    }
+
+    func testSearchResultsUseAuthorUIDForAvatar() {
+        let service = FourD4YService()
+        let html = """
+        <table>
+            <tr>
+                <th>
+                    <a href="viewthread.php?tid=31415&amp;extra=page%3D1">Search result title</a>
+                    <p><a href="space.php?uid=123456">searchauthor</a> / 2026-6-29</p>
+                </th>
+                <td class="nums"><strong>8</strong></td>
+                <td class="lastpost">
+                    <p><a href="space.php?uid=654321">lastposter</a> /
+                    <a href="redirect.php?tid=31415&amp;goto=lastpost">22:10</a></p>
+                </td>
+            </tr>
+        </table>
+        """
+
+        let results = service.parseSearchThreads(from: html)
+
+        XCTAssertEqual(results.count, 1)
+        XCTAssertEqual(results.first?.author.username, "searchauthor")
+        XCTAssertEqual(
+            results.first?.author.avatar,
+            "https://img02.4d4y.com/forum/uc_server/data/avatar/000/12/34/56_avatar_middle.jpg"
+        )
+        XCTAssertEqual(results.first?.commentCount, 8)
+    }
+
+    func testSearchResultsKeepEachAuthorsAvatarSeparate() {
+        let service = FourD4YService()
+        let html = """
+        <table>
+            <tr>
+                <th>
+                    <a href="viewthread.php?tid=101">First result</a>
+                    <p><a href="space.php?uid=111">firstauthor</a> / 2026-6-29</p>
+                </th>
+            </tr>
+            <tr>
+                <th>
+                    <a href='viewthread.php?tid=202'>Second result</a>
+                    <p><a href='space.php?uid=222'>secondauthor</a> / 2026-6-29</p>
+                </th>
+            </tr>
+        </table>
+        """
+
+        let results = service.parseSearchThreads(from: html)
+
+        XCTAssertEqual(results.map(\.author.username), ["firstauthor", "secondauthor"])
+        XCTAssertEqual(
+            results.map(\.author.avatar),
+            [
+                "https://img02.4d4y.com/forum/uc_server/data/avatar/000/00/01/11_avatar_middle.jpg",
+                "https://img02.4d4y.com/forum/uc_server/data/avatar/000/00/02/22_avatar_middle.jpg"
+            ]
+        )
     }
 
 

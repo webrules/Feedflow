@@ -34,6 +34,11 @@ class FourD4YService: ForumService {
         let timeAgo: String
     }
 
+    struct ContentImageSource: Equatable {
+        let thumbnailURL: String
+        let originalURL: String
+    }
+
     // GBK Encoding
     private var gbkEncoding: String.Encoding {
         let encoding = CFStringConvertEncodingToNSStringEncoding(CFStringEncoding(CFStringEncodings.GB_18030_2000.rawValue))
@@ -514,13 +519,22 @@ class FourD4YService: ForumService {
         }
 
         let html = try await fetchContent(url: url)
-        let pattern = "href=\\\"viewthread\\.php\\?tid=(\\d+)[^\\\"]*\\\"[^>]*>(.*?)</a>"
-        let regex = try NSRegularExpression(pattern: pattern, options: [.caseInsensitive, .dotMatchesLineSeparators])
+        let threads = parseSearchThreads(from: html)
+
+        AppLogger.debug("[4D4Y] Search returned \(threads.count) topics for \(query)")
+        return (threads, threads.count >= 20)
+    }
+
+    func parseSearchThreads(from html: String) -> [Thread] {
+        let pattern = "<a[^>]+href=[\"']viewthread\\.php\\?tid=(\\d+)[^\"']*[\"'][^>]*>(.*?)</a>"
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive, .dotMatchesLineSeparators]) else {
+            return []
+        }
         let matches = regex.matches(in: html, range: NSRange(html.startIndex..., in: html))
         let community = Community(id: "search", name: "Search", description: "", category: "4d4y", activeToday: 0, onlineNow: 0)
         var seenIDs = Set<String>()
 
-        let threads = matches.compactMap { match -> Thread? in
+        return matches.compactMap { match -> Thread? in
             guard let idRange = Range(match.range(at: 1), in: html),
                   let titleRange = Range(match.range(at: 2), in: html) else {
                 return nil
@@ -530,22 +544,33 @@ class FourD4YService: ForumService {
             let title = cleanContent(String(html[titleRange]))
             guard !title.isEmpty, seenIDs.insert(id).inserted else { return nil }
 
+            let context = surroundingHTMLBlock(in: html, around: match.range)
+            let authorName = extractThreadListAuthor(from: context) ?? "Unknown"
+            let authorAvatar: String
+            if let uid = extractUIDFromContext(context) {
+                authorAvatar = avatarURL(forUID: uid)
+            } else {
+                let extractedAvatar = extractAvatarURL(from: context)
+                authorAvatar = isGenericAvatar(extractedAvatar)
+                    ? extractAvatarURLFromAuthorUid(in: context)
+                    : extractedAvatar
+            }
+
             return Thread(
                 id: id,
                 title: title,
                 content: "",
-                author: User(id: "", username: "Unknown", avatar: "person.circle", role: nil),
+                author: User(id: authorName, username: authorName, avatar: authorAvatar, role: nil),
                 community: community,
-                timeAgo: "",
+                timeAgo: extractThreadListCreatedTime(from: context) ?? "",
                 likeCount: 0,
-                commentCount: 0,
+                commentCount: extractThreadListReplyCount(from: context),
                 isLiked: false,
-                tags: nil
+                tags: nil,
+                lastPostTime: extractThreadListLastPostTime(from: context),
+                lastPosterName: extractThreadListLastPoster(from: context)
             )
         }
-
-        AppLogger.debug("[4D4Y] Search returned \(threads.count) topics for \(query)")
-        return (threads, threads.count >= 20)
     }
 
     private func fetchCategoryThreadsInternal(categoryId: String, communities: [Community], page: Int, retryCount: Int) async throws -> [Thread] {
@@ -1860,6 +1885,99 @@ class FourD4YService: ForumService {
         }.joined()
     }
 
+    func contentImageSource(from imageTag: String) -> ContentImageSource? {
+        let src = imageAttribute(named: ["src", "data-src"], in: imageTag)
+        let file = imageAttribute(
+            named: ["zoomfile", "file", "data-original", "data-full", "data-original-src"],
+            in: imageTag
+        ) ?? zoomTarget(in: imageTag)
+
+        let srcIsPlaceholder = src?.localizedCaseInsensitiveContains("none.gif") == true ||
+            src?.localizedCaseInsensitiveContains("transparent.gif") == true
+        let thumbnailRaw = srcIsPlaceholder ? file : (src ?? file)
+
+        guard let thumbnailRaw, !thumbnailRaw.isEmpty else {
+            return nil
+        }
+
+        let originalRaw = file ?? originalImagePath(derivedFrom: thumbnailRaw)
+        return ContentImageSource(
+            thumbnailURL: normalizeContentImageURL(thumbnailRaw),
+            originalURL: normalizeContentImageURL(originalRaw)
+        )
+    }
+
+    private func imageAttribute(named names: [String], in imageTag: String) -> String? {
+        for name in names {
+            let escapedName = NSRegularExpression.escapedPattern(for: name)
+            let pattern = "(?:^|\\s)\(escapedName)\\s*=\\s*[\"']([^\"']+)[\"']"
+            guard let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive),
+                  let match = regex.firstMatch(in: imageTag, range: NSRange(imageTag.startIndex..., in: imageTag)),
+                  let range = Range(match.range(at: 1), in: imageTag) else {
+                continue
+            }
+
+            let value = String(imageTag[range])
+                .replacingOccurrences(of: "&amp;", with: "&")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if !value.isEmpty {
+                return value
+            }
+        }
+
+        return nil
+    }
+
+    private func zoomTarget(in imageTag: String) -> String? {
+        let pattern = "zoom\\s*\\([^,]+,\\s*[\"']([^\"']+)[\"']"
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive),
+              let match = regex.firstMatch(in: imageTag, range: NSRange(imageTag.startIndex..., in: imageTag)),
+              let range = Range(match.range(at: 1), in: imageTag) else {
+            return nil
+        }
+        return String(imageTag[range])
+    }
+
+    private func originalImagePath(derivedFrom thumbnail: String) -> String {
+        var original = thumbnail.replacingOccurrences(
+            of: "\\.thumb(?=\\.[A-Za-z0-9]+(?:[?#]|$))",
+            with: "",
+            options: [.regularExpression, .caseInsensitive]
+        )
+
+        if var components = URLComponents(string: original),
+           components.queryItems?.contains(where: { $0.name.caseInsensitiveCompare("thumb") == .orderedSame }) == true {
+            components.queryItems = components.queryItems?.filter {
+                $0.name.caseInsensitiveCompare("thumb") != .orderedSame
+            }
+            if components.path.localizedCaseInsensitiveContains("attachment.php") {
+                var queryItems = components.queryItems ?? []
+                queryItems.append(URLQueryItem(name: "nothumb", value: "yes"))
+                components.queryItems = queryItems
+            }
+            original = components.string ?? original
+        }
+
+        return original
+    }
+
+    private func normalizeContentImageURL(_ rawURL: String) -> String {
+        let url = rawURL
+            .replacingOccurrences(of: "&amp;", with: "&")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if url.hasPrefix("//") {
+            return "https:\(url)"
+        }
+        if url.hasPrefix("http://") || url.hasPrefix("https://") {
+            return url
+        }
+        if url.hasPrefix("/") {
+            return "https://www.4d4y.com\(url)"
+        }
+        return "\(baseURL)/\(url)"
+    }
+
     private func cleanContent(_ html: String) -> String {
         var processed = html
 
@@ -1877,28 +1995,32 @@ class FourD4YService: ForumService {
         }
 
         // 1. Handle Images
-        // Replace <img src="..."> with [IMAGE:url] marker
-        // Pattern: <img[^>]+src="([^">]+)"[^>]*>
-        // Note: Discuz sometimes uses 'file="url"' or 'onload' attributes, but standard is src.
-        // We will try to capture the src.
+        // Keep the thumbnail for inline display and preserve Discuz's original
+        // image URL for the full-screen viewer.
         do {
-            let imgRegex = try NSRegularExpression(pattern: "<img[^>]+src=\"([^\">]+)\"[^>]*>", options: .caseInsensitive)
+            let imgRegex = try NSRegularExpression(pattern: "<img\\b[^>]*>", options: .caseInsensitive)
             let matches = imgRegex.matches(in: processed, range: NSRange(processed.startIndex..., in: processed))
 
             for match in matches.reversed() {
-                if let srcRange = Range(match.range(at: 1), in: processed),
-                   let fullMatchRange = Range(match.range, in: processed) {
-                    let src = String(processed[srcRange])
+                guard let fullMatchRange = Range(match.range, in: processed) else { continue }
+                let imageTag = String(processed[fullMatchRange])
 
-                    // Exclude smilies/emojis and UI images from being turned into big block images
-                    if src.contains("smilies") || src.contains("images/default") || src.contains("images/common") || src.contains("common/back.gif") {
-                         // Attempt to replace with a generic emoji if possible, or just remove to avoid giant block
-                         // Ideally we map these, but for now removing avoids the UI bug.
-                         processed.replaceSubrange(fullMatchRange, with: "")
-                    } else {
-                        let fullSrc = src.starts(with: "http") ? src : "\(baseURL)/\(src)"
-                        processed.replaceSubrange(fullMatchRange, with: "\n[IMAGE:\(fullSrc)]\n")
-                    }
+                guard let imageSource = contentImageSource(from: imageTag) else {
+                    processed.replaceSubrange(fullMatchRange, with: "")
+                    continue
+                }
+
+                let thumbnail = imageSource.thumbnailURL
+                if thumbnail.contains("smilies") ||
+                    thumbnail.contains("images/default") ||
+                    thumbnail.contains("images/common") ||
+                    thumbnail.contains("common/back.gif") {
+                    processed.replaceSubrange(fullMatchRange, with: "")
+                } else {
+                    let marker = imageSource.originalURL == thumbnail
+                        ? "[IMAGE:\(thumbnail)]"
+                        : "[IMAGE:\(thumbnail)|\(imageSource.originalURL)]"
+                    processed.replaceSubrange(fullMatchRange, with: "\n\(marker)\n")
                 }
             }
         } catch {
