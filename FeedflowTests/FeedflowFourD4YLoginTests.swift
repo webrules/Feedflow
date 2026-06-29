@@ -234,6 +234,80 @@ final class FourD4YSessionCookieTests: XCTestCase {
 }
 
 // ======================================================================
+// SECTION 1b: Reply / New Thread / Delete parsing (today's changes)
+// ======================================================================
+
+private let typeidFormHTML = """
+<html><body><form>
+<input type="hidden" name="formhash" value="9a8b7c6d" />
+<select name="typeid" id="typeid"><option value="0">选择分类</option>
+<option value="123">[大杂烩]</option><option value="456">[各类配件]</option></select>
+</form></body></html>
+"""
+
+private let noTypeidFormHTML = """
+<html><body><form><input name="formhash" value="ffff1111"></form></body></html>
+"""
+
+final class FourD4YPostingParseTests: XCTestCase {
+
+    // typeid extraction — skips placeholder, returns first real category
+    func test_extractFirstTypeId_returnsFirstNonZero() {
+        let s = FourD4YService()
+        XCTAssertEqual(s.extractFirstTypeId(from: typeidFormHTML), "123")
+    }
+
+    func test_extractFirstTypeId_noSelect_returnsNil() {
+        let s = FourD4YService()
+        XCTAssertNil(s.extractFirstTypeId(from: noTypeidFormHTML))
+    }
+
+    // logged-in username detection from the bold profile link in nav
+    func test_parseLoggedInUsername_fromBoldProfileLink() {
+        XCTAssertEqual(FourD4YService.parseLoggedInUsername(from: wap4D4YThreadDetailHTML), "iamez")
+    }
+
+    func test_parseLoggedInUsername_welcomeBar() {
+        let html = "<div>欢迎您回来，<strong>Webrules</strong> <a href='logout'>退出</a></div>"
+        XCTAssertEqual(FourD4YService.parseLoggedInUsername(from: html), "Webrules")
+    }
+
+    func test_parseLoggedInUsername_guestReturnsNil() {
+        XCTAssertNil(FourD4YService.parseLoggedInUsername(from: guest4D4YHTML))
+    }
+
+    // first post id used for deleting a thread
+    func test_parseFirstPostId_fromAuthorPostMarker() {
+        XCTAssertEqual(FourD4YService.parseFirstPostId(from: wap4D4YThreadDetailHTML), "74407801")
+    }
+
+    func test_parseFirstPostId_none_returnsNil() {
+        XCTAssertNil(FourD4YService.parseFirstPostId(from: "<html><body>nothing here</body></html>"))
+    }
+
+    // delete only offered on own threads
+    func test_canDeleteThread_ownThread_true() {
+        let s = FourD4YService()
+        DatabaseManager.shared.saveSetting(key: "detected_4d4y_username", value: "Webrules")
+        let mine = FeedThread(id: "1", title: "t", content: "",
+                              author: User(id: "u", username: "Webrules", avatar: "", role: nil),
+                              community: Community(id: "2", name: "D", description: "", category: "", activeToday: 0, onlineNow: 0),
+                              timeAgo: "now", likeCount: 0, commentCount: 0)
+        XCTAssertTrue(s.canDeleteThread(mine))
+    }
+
+    func test_canDeleteThread_othersThread_false() {
+        let s = FourD4YService()
+        DatabaseManager.shared.saveSetting(key: "detected_4d4y_username", value: "Webrules")
+        let theirs = FeedThread(id: "1", title: "t", content: "",
+                                author: User(id: "u", username: "someoneElse", avatar: "", role: nil),
+                                community: Community(id: "2", name: "D", description: "", category: "", activeToday: 0, onlineNow: 0),
+                                timeAgo: "now", likeCount: 0, commentCount: 0)
+        XCTAssertFalse(s.canDeleteThread(theirs))
+    }
+}
+
+// ======================================================================
 // SECTION 2: Cache & Content Refresh (Bug 2)
 // ======================================================================
 

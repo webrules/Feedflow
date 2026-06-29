@@ -21,6 +21,8 @@ class LocalizationManager: ObservableObject {
             "select_community": ["en": "Select a Community", "zh": "选择社区"],
             "cancel": ["en": "Cancel", "zh": "取消"],
             "done": ["en": "Done", "zh": "完成"],
+            "delete_thread_confirm": ["en": "Delete this thread? This cannot be undone.", "zh": "确定删除该主题？此操作无法撤销。"],
+            "delete_failed": ["en": "Delete Failed", "zh": "删除失败"],
             "save": ["en": "Save", "zh": "保存"],
             "close": ["en": "Close", "zh": "关闭"],
             "error": ["en": "Error", "zh": "错误"],

@@ -4,10 +4,13 @@ struct ThreadDetailView: View {
     @StateObject private var viewModel: ThreadDetailViewModel
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject var navigationManager: NavigationManager
+    @EnvironmentObject var themeManager: ThemeManager
     @ObservedObject var localizationManager = LocalizationManager.shared
     @State private var replyText: String = ""
     @State private var showAISummary: Bool = false
     @State private var replyErrorMessage: String?
+    @State private var showDeleteConfirm: Bool = false
+    @State private var deleteErrorMessage: String?
     let service: ForumService
 
     init(thread: Thread, service: ForumService, contextThreads: [Thread] = []) {
@@ -38,7 +41,9 @@ struct ThreadDetailView: View {
                                 // Header (hidden for RSS)
                                 if !isRSSFeed {
                                     HStack {
-                                        AvatarView(urlOrName: viewModel.thread.author.avatar, size: 40, fallbackText: viewModel.thread.author.username)
+                                        if service.id != "hackernews" {
+                                            AvatarView(urlOrName: viewModel.thread.author.avatar, size: 40, fallbackText: viewModel.thread.author.username)
+                                        }
 
                                         VStack(alignment: .leading) {
                                             Text(viewModel.thread.author.username)
@@ -86,7 +91,7 @@ struct ThreadDetailView: View {
                                 } else {
                                     LazyVStack(spacing: 0) {
                                         ForEach(viewModel.comments) { comment in
-                                            CommentRow(comment: comment, canReply: canReply) {
+                                            CommentRow(comment: comment, canReply: canReply, hideAvatar: service.id == "hackernews") {
                                                 viewModel.selectCommentForReply(comment)
                                             }
                                             .onAppear {
@@ -217,6 +222,27 @@ struct ThreadDetailView: View {
         } message: {
             Text(replyErrorMessage ?? "")
         }
+        .alert("delete_thread_confirm".localized(), isPresented: $showDeleteConfirm) {
+            Button("cancel".localized(), role: .cancel) {}
+            Button("delete".localized(), role: .destructive) {
+                Task {
+                    do {
+                        try await viewModel.deleteThread()
+                        dismiss()
+                    } catch {
+                        deleteErrorMessage = error.localizedDescription
+                    }
+                }
+            }
+        }
+        .alert("delete_failed".localized(), isPresented: Binding(
+            get: { deleteErrorMessage != nil },
+            set: { if !$0 { deleteErrorMessage = nil } }
+        )) {
+            Button("OK", role: .cancel) { deleteErrorMessage = nil }
+        } message: {
+            Text(deleteErrorMessage ?? "")
+        }
         .task {
             await viewModel.loadDetails()
         }
@@ -265,6 +291,20 @@ struct ThreadDetailView: View {
                 )
                 .help(viewModel.isLatest ? "Latest Content" : "Local Content")
 
+                if viewModel.canDelete {
+                    Button(action: { showDeleteConfirm = true }) {
+                        FeedflowSymbol(
+                            name: "trash",
+                            size: 18,
+                            color: .red,
+                            background: Color.red.opacity(0.12),
+                            frameSize: 36,
+                            shape: .circle
+                        )
+                    }
+                    .buttonStyle(.plain)
+                }
+
                 Button(action: {
                     Task { await viewModel.refreshDetails() }
                 }) {
@@ -301,6 +341,18 @@ struct ThreadDetailView: View {
                 }) {
                     FeedflowSymbol(
                         name: FeedflowIcon.ai,
+                        size: 18,
+                        color: .forumAccent,
+                        background: Color.forumAccent.opacity(0.12),
+                        frameSize: 36,
+                        shape: .circle
+                    )
+                }
+                .buttonStyle(.plain)
+
+                Button(action: { themeManager.isDarkMode.toggle() }) {
+                    FeedflowSymbol(
+                        name: FeedflowIcon.theme,
                         size: 18,
                         color: .forumAccent,
                         background: Color.forumAccent.opacity(0.12),
@@ -785,11 +837,14 @@ struct TagView: View {
 struct CommentRow: View {
     let comment: Comment
     let canReply: Bool
+    var hideAvatar: Bool = false
     let onReply: () -> Void
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
-            AvatarView(urlOrName: comment.author.avatar, size: 32, fallbackText: comment.author.username)
+            if !hideAvatar {
+                AvatarView(urlOrName: comment.author.avatar, size: 32, fallbackText: comment.author.username)
+            }
 
             VStack(alignment: .leading, spacing: 6) {
                 HStack {

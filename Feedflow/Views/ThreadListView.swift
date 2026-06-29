@@ -4,6 +4,7 @@ struct ThreadListView: View {
     @StateObject private var viewModel: ThreadListViewModel
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject var navigationManager: NavigationManager
+    @EnvironmentObject var themeManager: ThemeManager
     let community: Community
     let service: ForumService
     @State private var isInitialLoad = true
@@ -158,6 +159,10 @@ struct ThreadListView: View {
 
                     ToolbarSymbolButton(name: FeedflowIcon.refresh) {
                         startManualRefresh()
+                    }
+
+                    ToolbarSymbolButton(name: FeedflowIcon.theme) {
+                        themeManager.isDarkMode.toggle()
                     }
 
                     ToolbarSymbolButton(name: FeedflowIcon.home) {
@@ -378,46 +383,53 @@ struct ThreadRow: View {
     let service: ForumService
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 9) {
-            badgeRow
-
-            Text(thread.title)
-                .font(.system(size: 16, weight: .semibold))
-                .foregroundColor(.forumTextPrimary)
-                .lineLimit(2)
-                .multilineTextAlignment(.leading)
-                .fixedSize(horizontal: false, vertical: true)
-
-            if ["4d4y", "v2ex", "linux_do"].contains(service.id), let time = thread.lastPostTime, !time.isEmpty {
-                HStack(spacing: 4) {
-                    if let poster = thread.lastPosterName, !poster.isEmpty {
-                        Text("↳ \(poster) · \(time.replacingOccurrences(of: #"^\d{4}[-/.]"#, with: "", options: .regularExpression))")
-                            .font(.system(size: 11, weight: .regular))
-                            .foregroundColor(.forumTextSecondary)
-                            .lineLimit(1)
-                    } else {
-                        Text("↳ \(time.replacingOccurrences(of: #"^\d{4}[-/.]"#, with: "", options: .regularExpression))")
-                            .font(.system(size: 11, weight: .regular))
-                            .foregroundColor(.forumTextSecondary)
-                            .lineLimit(1)
-                    }
-                }
+        HStack(alignment: .center, spacing: 10) {
+            if !isRSS && service.id != "hackernews" {
+                AvatarView(urlOrName: thread.author.avatar, size: 40, fallbackText: thread.author.username)
             }
+            VStack(alignment: .leading, spacing: 9) {
+                if !["zhihu", "hackernews"].contains(service.id) {
+                    badgeRow
+                }
 
-            if let excerpt {
-                Text(excerpt)
-                    .font(.system(size: 13, weight: .regular))
-                    .foregroundColor(.forumTextSecondary)
+                Text(thread.title)
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundColor(.forumTextPrimary)
                     .lineLimit(2)
                     .multilineTextAlignment(.leading)
                     .fixedSize(horizontal: false, vertical: true)
-            }
 
-            if footerHasContent {
-                footer
+                if ["4d4y", "v2ex", "linux_do"].contains(service.id), let time = thread.lastPostTime, !time.isEmpty {
+                    HStack(spacing: 4) {
+                        if let poster = thread.lastPosterName, !poster.isEmpty {
+                            Text("↳ \(poster) · \(time.replacingOccurrences(of: #"^\d{4}[-/.]"#, with: "", options: .regularExpression))")
+                                .font(.system(size: 11, weight: .regular))
+                                .foregroundColor(.forumTextSecondary)
+                                .lineLimit(1)
+                        } else {
+                            Text("↳ \(time.replacingOccurrences(of: #"^\d{4}[-/.]"#, with: "", options: .regularExpression))")
+                                .font(.system(size: 11, weight: .regular))
+                                .foregroundColor(.forumTextSecondary)
+                                .lineLimit(1)
+                        }
+                    }
+                }
+
+                if let excerpt {
+                    Text(excerpt)
+                        .font(.system(size: 13, weight: .regular))
+                        .foregroundColor(.forumTextSecondary)
+                        .lineLimit(2)
+                        .multilineTextAlignment(.leading)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                if footerHasContent {
+                    footer
+                }
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 13)
         .padding(.vertical, 12)
         .background(Color.forumCard)
@@ -428,11 +440,14 @@ struct ThreadRow: View {
         )
     }
 
+    private var compactMeta: Bool {
+        ["4d4y", "v2ex", "linux_do"].contains(service.id)
+    }
+
     private var badgeRow: some View {
-        let compact = ["4d4y", "v2ex", "linux_do"].contains(service.id)
+        let compact = compactMeta
         return HStack(spacing: 6) {
             if compact {
-                AvatarView(urlOrName: thread.author.avatar, size: 18, fallbackText: thread.author.username)
                 Text("\(thread.author.username) · \(thread.timeAgo)")
                     .font(.system(size: 11, weight: .medium))
                     .foregroundColor(.forumTextSecondary)
@@ -471,9 +486,6 @@ struct ThreadRow: View {
     private var footer: some View {
         HStack(spacing: 8) {
             let showInlineMeta = ["4d4y", "v2ex", "linux_do"].contains(service.id)
-            if !isRSS && !showInlineMeta {
-                AvatarView(urlOrName: thread.author.avatar, size: 20, fallbackText: thread.author.username)
-            }
 
             Text(metadata)
                 .font(.system(size: 12, weight: .medium))

@@ -25,6 +25,14 @@ class ThreadDetailViewModel: ObservableObject {
         markCurrentZhihuRecommendationAsRead()
     }
 
+    var canDelete: Bool {
+        service.canDeleteThread(thread)
+    }
+
+    func deleteThread() async throws {
+        try await service.deleteThread(threadId: thread.id, categoryId: thread.community.id)
+    }
+
     func goPrevious() {
         guard let index = contextThreads.firstIndex(where: { $0.id == thread.id }), index > 0 else { return }
         let prev = contextThreads[index - 1]
