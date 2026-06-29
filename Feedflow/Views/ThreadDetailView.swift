@@ -667,8 +667,8 @@ struct ParsedContentView: View {
                             )
                             .padding(.leading, 4)
                     }
-                case .image(let url):
-                    AsyncImage(url: URL(string: url)) { phase in
+                case .image(let thumbnailURL, let originalURL):
+                    AsyncImage(url: URL(string: thumbnailURL)) { phase in
                         switch phase {
                         case .empty:
                             ProgressView()
@@ -678,7 +678,7 @@ struct ParsedContentView: View {
                                  .aspectRatio(contentMode: .fit)
                                  .cornerRadius(8)
                                  .onTapGesture(count: 2) {
-                                     selectedImageURL = url
+                                     selectedImageURL = originalURL
                                  }
                         case .failure:
                             EmptyView()
@@ -708,7 +708,7 @@ struct ParsedContentView: View {
 
     enum ContentBlock: Hashable {
         case text(String)
-        case image(String)
+        case image(thumbnailURL: String, originalURL: String)
         case quote(String)
     }
 
@@ -728,13 +728,18 @@ struct ParsedContentView: View {
                 // Subsequent parts start with "url]" followed by text
                 // Example: "http://.../img.jpg]\nSome text..."
                 if let range = component.range(of: "]") {
-                    let url = String(component[..<range.lowerBound])
+                    let payload = String(component[..<range.lowerBound])
                     let remainingText = String(component[range.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
-                    let imageKey = normalizedImageKey(url)
+                    if let imageURLs = Self.imageURLs(fromMarkerPayload: payload) {
+                        let imageKey = normalizedImageKey(imageURLs.thumbnailURL)
 
-                    if !seenImages.contains(imageKey) {
-                        seenImages.insert(imageKey)
-                        blocks.append(.image(url))
+                        if !seenImages.contains(imageKey) {
+                            seenImages.insert(imageKey)
+                            blocks.append(.image(
+                                thumbnailURL: imageURLs.thumbnailURL,
+                                originalURL: imageURLs.originalURL
+                            ))
+                        }
                     }
                     if !remainingText.isEmpty {
                         blocks.append(.text(remainingText))
@@ -784,6 +789,24 @@ struct ParsedContentView: View {
             }
         }
         return quoteExpandedBlocks
+    }
+
+    static func imageURLs(fromMarkerPayload payload: String) -> (thumbnailURL: String, originalURL: String)? {
+        let parts = payload.split(separator: "|", maxSplits: 1, omittingEmptySubsequences: false)
+        guard let thumbnailPart = parts.first else { return nil }
+
+        let thumbnailURL = String(thumbnailPart).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !thumbnailURL.isEmpty else { return nil }
+
+        let originalURL: String
+        if parts.count > 1 {
+            let candidate = String(parts[1]).trimmingCharacters(in: .whitespacesAndNewlines)
+            originalURL = candidate.isEmpty ? thumbnailURL : candidate
+        } else {
+            originalURL = thumbnailURL
+        }
+
+        return (thumbnailURL, originalURL)
     }
 
     private func normalizedImageKey(_ rawURL: String) -> String {

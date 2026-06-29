@@ -49,7 +49,7 @@ class LocalizationManager: ObservableObject {
             "api_key_note": ["en": "Get your API key from Google AI Studio", "zh": "从 Google AI Studio 获取您的 API 密钥"],
             "reading": ["en": "Reading", "zh": "阅读"],
             "background_prefetch": ["en": "Background prefetch", "zh": "后台预取"],
-            "background_prefetch_note": ["en": "When enabled, Feedflow preloads details only for public read-only sources while on Wi-Fi.", "zh": "启用后，Feedflow 仅在 Wi-Fi 下预加载公开只读来源的详情。"],
+            "background_prefetch_note": ["en": "When enabled, Feedflow preloads thread details while you browse, including on cellular data.", "zh": "启用后，Feedflow 会在浏览时预加载帖子详情，包括使用蜂窝数据时。"],
 
             // AI Summary
             "ai_assistant": ["en": "AI Assistant", "zh": "AI 助手"],

@@ -211,14 +211,14 @@
 - **[Unit]** For non-4D4Y services → always returns fresh fetch result
 
 ### 3.16 Background prefetch
-- **[Integration]** With WiFi + prefetch enabled → threads prefetched silently
-- **[Integration]** No WiFi or prefetch disabled → `[Prefetch] Paused: Not on WiFi` logged
+- **[Integration]** Prefetch enabled → threads prefetched silently on WiFi or cellular
+- **[Integration]** Prefetch disabled → no threads are queued
 - **[Unit]** `maxPrefetchQueueSize = 5` → at most 5 threads queued
 
-### 3.17 Network-aware prefetch
-- **[Unit]** Simulator → `NetworkMonitor.isWiFi` returns true (simulator fallback)
-- **[Unit]** Device on cellular → `NetworkMonitor.isWiFi` returns false
-- **[Integration]** Switch from WiFi to cellular → prefetch pauses
+### 3.17 Prefetch Settings opt-out
+- **[Unit]** Missing UserDefaults value → prefetch defaults enabled
+- **[Unit]** UserDefaults value false → prefetch disabled
+- **[Integration]** Device on cellular → prefetch continues unless disabled in Settings
 
 ---
 
@@ -382,7 +382,7 @@
 - **[UI]** Clear → key field emptied, storage cleared
 
 ### 8.2 Background prefetch toggle
-- **[UI]** Toggle ON → prefetch activates (when on WiFi)
+- **[UI]** Toggle ON → prefetch activates on WiFi or cellular
 - **[UI]** Toggle OFF → prefetch stops immediately
 - **[Integration]** Toggle state persists via UserDefaults
 

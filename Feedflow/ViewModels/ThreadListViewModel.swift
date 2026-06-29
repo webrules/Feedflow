@@ -26,8 +26,15 @@ class ThreadListViewModel: ObservableObject {
 
     static let backgroundPrefetchEnabledKey = "background_prefetch_enabled"
 
+    static func isBackgroundPrefetchEnabledByDefault() -> Bool {
+        guard UserDefaults.standard.object(forKey: backgroundPrefetchEnabledKey) != nil else {
+            return true
+        }
+        return UserDefaults.standard.bool(forKey: backgroundPrefetchEnabledKey)
+    }
+
     private var isBackgroundPrefetchEnabled: Bool {
-        UserDefaults.standard.bool(forKey: Self.backgroundPrefetchEnabledKey)
+        Self.isBackgroundPrefetchEnabledByDefault()
     }
 
     private var serviceAllowsBackgroundPrefetch: Bool {
@@ -341,7 +348,6 @@ class ThreadListViewModel: ObservableObject {
 
     func prefetchThread(thread: Thread) {
         guard allowsConfiguredBackgroundPrefetch else { return }
-        guard NetworkMonitor.shared.isWiFi else { return }
         guard prefetchQueue.count < maxPrefetchQueueSize else { return }
 
         // Skip if already in local DB
@@ -384,14 +390,6 @@ class ThreadListViewModel: ObservableObject {
 
         Task {
             while !prefetchQueue.isEmpty {
-                // Double check WiFi at start of each item
-                guard NetworkMonitor.shared.isWiFi else {
-                    AppLogger.debug("[Prefetch] Paused: Not on WiFi.")
-                    prefetchQueue.removeAll()
-                    isQueueProcessing = false
-                    return
-                }
-
                 let thread = prefetchQueue.removeFirst()
 
                 do {

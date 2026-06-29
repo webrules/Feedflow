@@ -2,7 +2,7 @@ import SwiftUI
 
 struct SettingsView: View {
     @State private var geminiKey: String = ""
-    @State private var backgroundPrefetchEnabled = UserDefaults.standard.bool(forKey: ThreadListViewModel.backgroundPrefetchEnabledKey)
+    @State private var backgroundPrefetchEnabled = ThreadListViewModel.isBackgroundPrefetchEnabledByDefault()
     @Environment(\.dismiss) var dismiss
     @ObservedObject var localizationManager = LocalizationManager.shared
 

@@ -49,7 +49,7 @@ Generated from source analysis — use for test case creation.
 | 3.14 | Community list caching to SQLite | `DatabaseManager.saveCommunities/getCommunities` |
 | 3.15 | Cache-preservation fallback when fetch returns fewer items | `ForumViewModel.resolveCommunitiesAfterFetch()` |
 | 3.16 | Background prefetch of thread details for reading offline | `ThreadListViewModel` prefetch queue |
-| 3.17 | Network-aware prefetch (WiFi only, user toggle) | `NetworkMonitor.isWiFi`, Settings toggle |
+| 3.17 | Prefetch enabled by default with Settings opt-out | Settings toggle |
 
 ## 4. Reading & Accessibility
 
