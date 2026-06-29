@@ -25,6 +25,13 @@ protocol ForumService {
     func postComment(topicId: String, categoryId: String, content: String) async throws
     func createThread(categoryId: String, title: String, content: String) async throws
 
+    /// Username of the currently logged-in account, if known.
+    var currentUsername: String? { get }
+    /// Whether the logged-in user can delete this thread (i.e. it's their own).
+    func canDeleteThread(_ thread: Thread) -> Bool
+    /// Delete a thread the user owns.
+    func deleteThread(threadId: String, categoryId: String) async throws
+
     /// Search for threads matching a query. Returns threads and a flag indicating if more results are available.
     func searchThreads(query: String, page: Int) async throws -> ([Thread], Bool)
     func getWebURL(for thread: Thread) -> String
@@ -39,6 +46,13 @@ extension ForumService {
 
     // Default no-op — session is always ready
     func restoreSession() async -> Bool { return true }
+
+    // Default: no known logged-in user, deletion unsupported
+    var currentUsername: String? { nil }
+    func canDeleteThread(_ thread: Thread) -> Bool { false }
+    func deleteThread(threadId: String, categoryId: String) async throws {
+        throw NSError(domain: "ForumService", code: 501, userInfo: [NSLocalizedDescriptionKey: "Delete not supported."])
+    }
 
     // Default implementation optional or helper
     func getWebURL(for thread: Thread) -> String { return "" }

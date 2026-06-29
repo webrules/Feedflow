@@ -13,6 +13,7 @@ class FourD4YService: ForumService {
     private let browserUserAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
     private var currentSID: String?
     private var currentFormHash: String?
+    private var detectedUsername: String?
 
     private struct ParsedPostAuthor {
         let userId: String
@@ -327,6 +328,15 @@ class FourD4YService: ForumService {
         let isLoggedInPage = html.contains("action=logout") || html.contains("退出")
         if isLoggedInPage {
             extractSID(from: html)
+            detectLoggedInUsername(from: html)
+        }
+
+        // FormHash is not session-sensitive like SID, so always capture it when
+        // present. The reply/new-thread pages may not always be detected as
+        // logged-in, but they still carry a usable formhash.
+        if currentFormHash == nil, let formHash = extractFormHash(from: html) {
+            self.currentFormHash = formHash
+            AppLogger.debug("[4D4Y] Extracted FormHash (unconditional): \(formHash)")
         }
 
         // DEBUG: Log login state indicators from the response HTML
@@ -403,6 +413,31 @@ class FourD4YService: ForumService {
             }
         }
 
+        return nil
+    }
+
+    // Parses the first selectable 主题分类 (typeid) from a Discuz new-thread form.
+    // Skips the empty placeholder option so we send a real category.
+    func extractFirstTypeId(from html: String) -> String? {
+        guard let selectRegex = try? NSRegularExpression(pattern: "<select[^>]*name=['\"]typeid['\"][^>]*>(.*?)</select>", options: [.caseInsensitive, .dotMatchesLineSeparators]),
+              let selectMatch = selectRegex.firstMatch(in: html, options: [], range: NSRange(html.startIndex..., in: html)),
+              let selectRange = Range(selectMatch.range(at: 1), in: html) else {
+            return nil
+        }
+        let optionsHTML = String(html[selectRange])
+
+        guard let optionRegex = try? NSRegularExpression(pattern: "<option[^>]*value=['\"]([0-9]+)['\"]", options: [.caseInsensitive]) else {
+            return nil
+        }
+        let matches = optionRegex.matches(in: optionsHTML, range: NSRange(optionsHTML.startIndex..., in: optionsHTML))
+        for match in matches {
+            if let r = Range(match.range(at: 1), in: optionsHTML) {
+                let value = String(optionsHTML[r])
+                if value != "0" && !value.isEmpty {
+                    return value
+                }
+            }
+        }
         return nil
     }
 
@@ -899,6 +934,7 @@ class FourD4YService: ForumService {
          let url = URL(string: "\(baseURL)/viewthread.php?tid=\(threadId)\(sidParam)\(pageParam)")!
          AppLogger.debug("[4D4Y] Fetching thread detail: \(url)")
          let html = try await fetchContent(url: url)
+         detectLoggedInUsername(from: html)
 
          if let parsed = parseThreadDetailHTML(html, threadId: threadId, page: page) {
              return parsed
@@ -1588,24 +1624,49 @@ class FourD4YService: ForumService {
     }
 
     func createThread(categoryId: String, title: String, content: String) async throws {
+        do {
+            try await createThreadInternal(categoryId: categoryId, title: title, content: content)
+        } catch {
+            let errorString = error.localizedDescription
+            if errorString.contains("未登录") || errorString.contains("登录") || errorString.contains("login") || errorString.contains("无权访问") {
+                AppLogger.debug("[4D4Y] Auth error detected during new thread. Attempting auto-login...")
+                if try await performAutoLogin() {
+                    self.currentSID = nil
+                    self.currentFormHash = nil
+
+                    AppLogger.debug("[4D4Y] Retrying new thread after auto-login...")
+                    try await createThreadInternal(categoryId: categoryId, title: title, content: content)
+                    return
+                }
+            }
+            throw error
+        }
+    }
+
+    private func createThreadInternal(categoryId: String, title: String, content: String) async throws {
         // Ensure system storage has our saved cookies
         syncCookiesToSystem()
 
-        // 1. Ensure we have a formhash
+        // 1. Fetch the new-thread form first; it carries both the formhash and
+        // the typeid options. This also primes currentFormHash unconditionally.
+        let sidParam = currentSID.map { "&sid=\($0)" } ?? ""
+        let formHTML = try await fetchContent(url: URL(string: "\(baseURL)/post.php?action=newthread&fid=\(categoryId)\(sidParam)")!)
         if currentFormHash == nil {
-            _ = try await fetchCategories() // Usually index has a formhash too
+            _ = try await fetchCategories()
         }
 
         guard let formhash = currentFormHash else {
             throw NSError(domain: "4D4Y", code: 401, userInfo: [NSLocalizedDescriptionKey: "No formhash found. Are you logged in?"])
         }
 
+        // Some forums require a 主题分类 (typeid). Pick the first available type.
+        let typeId = extractFirstTypeId(from: formHTML)
+
         // 2. Prepare POST URL
-        let sidParam = currentSID.map { "&sid=\($0)" } ?? ""
         let url = URL(string: "\(baseURL)/post.php?action=newthread&fid=\(categoryId)&extra=&topicsubmit=yes&inajax=1\(sidParam)")!
 
         // 3. Construct Body
-        let postData: [String: String] = [
+        var postData: [String: String] = [
             "formhash": formhash,
             "posttime": "\(Int(Date().timeIntervalSince1970))",
             "wysiwyg": "1",
@@ -1614,6 +1675,10 @@ class FourD4YService: ForumService {
             "topicsubmit": "yes",
             "inajax": "1"
         ]
+        if let typeId = typeId {
+            postData["typeid"] = typeId
+            AppLogger.debug("[4D4Y] Using typeid=\(typeId) for new thread.")
+        }
 
         var parts: [String] = []
         for (key, value) in postData {
@@ -1633,6 +1698,8 @@ class FourD4YService: ForumService {
         request.setValue(browserUserAgent, forHTTPHeaderField: "User-Agent")
         request.setValue("text/xml, */*", forHTTPHeaderField: "Accept")
         request.setValue("XMLHttpRequest", forHTTPHeaderField: "X-Requested-With")
+        request.setValue("\(baseURL)/post.php?action=newthread&fid=\(categoryId)", forHTTPHeaderField: "Referer")
+        request.setValue("https://www.4d4y.com", forHTTPHeaderField: "Origin")
 
         AppLogger.debug("[4D4Y] Creating new thread (fid=\(categoryId))...")
         let (data, response) = try await URLSession.shared.data(for: request)
@@ -1644,9 +1711,137 @@ class FourD4YService: ForumService {
                 AppLogger.debug("[4D4Y] Thread creation successful.")
             } else {
                 AppLogger.debug("[4D4Y] Thread creation failed. Response length: \(responseString.count)")
-                throw NSError(domain: "4D4Y", code: 403, userInfo: [NSLocalizedDescriptionKey: "Failed to create thread."])
+                var errorMessage = "Failed to create thread."
+                if let regex = try? NSRegularExpression(pattern: "<!\\[CDATA\\[(.*?)\\]\\]>", options: [.dotMatchesLineSeparators]),
+                   let match = regex.firstMatch(in: responseString, options: [], range: NSRange(responseString.startIndex..., in: responseString)),
+                   let range = Range(match.range(at: 1), in: responseString) {
+                    errorMessage = String(responseString[range])
+                } else if responseString.contains("ajaxerror") {
+                    errorMessage = "Not logged in or access denied (AJAX error)."
+                }
+                throw NSError(domain: "4D4Y", code: 403, userInfo: [NSLocalizedDescriptionKey: errorMessage])
             }
         }
+    }
+
+    var currentUsername: String? {
+        if let detected = detectedUsername, !detected.isEmpty {
+            return detected
+        }
+        if let persisted = DatabaseManager.shared.getSetting(key: "detected_\(id)_username"), !persisted.isEmpty {
+            return persisted
+        }
+        guard let encryptedUsername = DatabaseManager.shared.getSetting(key: "login_\(id)_username"),
+              let username = EncryptionHelper.shared.decrypt(encryptedUsername) else {
+            return nil
+        }
+        return username.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    // Detect the logged-in account name from a Discuz page. The desktop header
+    // shows the current user as a bold profile link; fall back to the welcome bar.
+    private func detectLoggedInUsername(from html: String) {
+        if detectedUsername != nil { return }
+        if let name = FourD4YService.parseLoggedInUsername(from: html) {
+            detectedUsername = name
+            DatabaseManager.shared.saveSetting(key: "detected_\(id)_username", value: name)
+            AppLogger.debug("[4D4Y] Detected logged-in username: \(name)")
+        }
+    }
+
+    static func parseLoggedInUsername(from html: String) -> String? {
+        let patterns = [
+            // Bold profile link in the top nav = the logged-in user
+            "space\\.php\\?uid=\\d+\"[^>]*font-weight:\\s*800[^>]*>([^<]{1,40})</a>",
+            "欢迎您回来[，,]\\s*(?:<[^>]+>)*\\s*([^<\\s，,]{1,40})",
+            "space\\.php\\?username=([^\"'&]{1,40})\"[^>]*>(?:个人空间|我的)"
+        ]
+        for pattern in patterns {
+            guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { continue }
+            if let m = regex.firstMatch(in: html, options: [], range: NSRange(html.startIndex..., in: html)),
+               let r = Range(m.range(at: 1), in: html) {
+                let raw = String(html[r])
+                let name = (raw.removingPercentEncoding ?? raw).trimmingCharacters(in: .whitespacesAndNewlines)
+                if !name.isEmpty { return name }
+            }
+        }
+        return nil
+    }
+
+    static func parseFirstPostId(from html: String) -> String? {
+        let pidPatterns = ["pid=(\\d+)", "reppost=(\\d+)", "repquote=(\\d+)", "authorposton(\\d+)", "post_(\\d+)"]
+        for pat in pidPatterns {
+            if let rx = try? NSRegularExpression(pattern: pat, options: []),
+               let m = rx.firstMatch(in: html, options: [], range: NSRange(html.startIndex..., in: html)),
+               let r = Range(m.range(at: 1), in: html) {
+                return String(html[r])
+            }
+        }
+        return nil
+    }
+
+    func canDeleteThread(_ thread: Thread) -> Bool {
+        guard let me = currentUsername, !me.isEmpty else { return false }
+        return thread.author.username.caseInsensitiveCompare(me) == .orderedSame
+    }
+
+    func deleteThread(threadId: String, categoryId: String) async throws {
+        syncCookiesToSystem()
+
+        let sidParam = currentSID.map { "&sid=\($0)" } ?? ""
+        // Fetch the thread to obtain the first post id (pid).
+        let html = try await fetchContent(url: URL(string: "\(baseURL)/viewthread.php?tid=\(threadId)\(sidParam)")!)
+
+        guard let pid = FourD4YService.parseFirstPostId(from: html) else {
+            throw NSError(domain: "4D4Y", code: 404, userInfo: [NSLocalizedDescriptionKey: "Could not locate post to delete."])
+        }
+
+        // Fetch the edit form for the first post; it carries a fresh formhash.
+        let editForm = try await fetchContent(url: URL(string: "\(baseURL)/post.php?action=edit&fid=\(categoryId)&tid=\(threadId)&pid=\(pid)&page=1\(sidParam)")!)
+        let formhash = extractFormHash(from: editForm) ?? currentFormHash
+        guard let formhash = formhash else {
+            throw NSError(domain: "4D4Y", code: 401, userInfo: [NSLocalizedDescriptionKey: "No formhash found. Are you logged in?"])
+        }
+
+        let url = URL(string: "\(baseURL)/post.php?action=edit&fid=\(categoryId)&tid=\(threadId)&pid=\(pid)&page=1&editsubmit=yes&inajax=1\(sidParam)")!
+        let postData: [String: String] = [
+            "formhash": formhash,
+            "delete": "1",
+            "editsubmit": "yes",
+            "inajax": "1"
+        ]
+        var parts: [String] = []
+        for (key, value) in postData {
+            let encodedKey = key.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? key
+            parts.append("\(encodedKey)=\(gbkEncode(value))")
+        }
+        guard let bodyData = parts.joined(separator: "&").data(using: .utf8) else {
+            throw NSError(domain: "4D4Y", code: 400, userInfo: [NSLocalizedDescriptionKey: "Failed to encode delete body."])
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.httpBody = bodyData
+        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+        request.setValue(browserUserAgent, forHTTPHeaderField: "User-Agent")
+        request.setValue("text/xml, */*", forHTTPHeaderField: "Accept")
+        request.setValue("XMLHttpRequest", forHTTPHeaderField: "X-Requested-With")
+        request.setValue("\(baseURL)/viewthread.php?tid=\(threadId)", forHTTPHeaderField: "Referer")
+        request.setValue("https://www.4d4y.com", forHTTPHeaderField: "Origin")
+
+        let (data, _) = try await URLSession.shared.data(for: request)
+        let responseString = String(data: data, encoding: gbkEncoding) ?? String(decoding: data, as: UTF8.self)
+        if responseString.contains("succeed") || responseString.contains("成功") {
+            AppLogger.debug("[4D4Y] Thread deleted.")
+            return
+        }
+        var errorMessage = "Failed to delete thread."
+        if let regex = try? NSRegularExpression(pattern: "<!\\[CDATA\\[(.*?)\\]\\]>", options: [.dotMatchesLineSeparators]),
+           let match = regex.firstMatch(in: responseString, options: [], range: NSRange(responseString.startIndex..., in: responseString)),
+           let range = Range(match.range(at: 1), in: responseString) {
+            errorMessage = String(responseString[range])
+        }
+        throw NSError(domain: "4D4Y", code: 403, userInfo: [NSLocalizedDescriptionKey: errorMessage])
     }
 
     private func gbkEncode(_ string: String) -> String {

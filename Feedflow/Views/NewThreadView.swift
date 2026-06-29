@@ -107,38 +107,41 @@ struct NewThreadView: View {
             .navigationTitle("new_thread".localized())
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .bottomBar) {
-                    HStack {
-                        Button("cancel".localized()) { dismiss() }
-                            .foregroundColor(.forumAccent)
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button("cancel".localized()) { dismiss() }
+                        .foregroundColor(.forumAccent)
+                }
 
-                        Spacer()
-
-                        Button(action: {
-                            Task {
-                                do {
-                                    try await viewModel.postThread()
-                                    dismiss()
-                                } catch {
-                                    postErrorMessage = error.localizedDescription
-                                }
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button(action: {
+                        Task {
+                            do {
+                                try await viewModel.postThread()
+                                dismiss()
+                            } catch {
+                                postErrorMessage = error.localizedDescription
                             }
-                        }) {
-                            Text("thread_button".localized())
-                                .font(.headline)
-                                .foregroundColor(.white)
-                                .padding(.horizontal, 16)
-                                .padding(.vertical, 8)
-                                .background(viewModel.title.isEmpty || viewModel.content.isEmpty ? Color.gray : Color.forumAccent)
-                                .cornerRadius(20)
                         }
-                        .disabled(viewModel.title.isEmpty || viewModel.content.isEmpty || viewModel.isPosting)
+                    }) {
+                        Text("thread_button".localized())
+                            .font(.headline)
+                            .foregroundColor(.white)
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 8)
+                            .background(viewModel.title.isEmpty || viewModel.content.isEmpty ? Color.gray : Color.forumAccent)
+                            .cornerRadius(20)
+                    }
+                    .disabled(viewModel.title.isEmpty || viewModel.content.isEmpty || viewModel.isPosting)
+                }
+
+                ToolbarItemGroup(placement: .keyboard) {
+                    Spacer()
+                    Button("done".localized()) {
+                        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
                     }
                 }
             }
             .toolbarBackground(Color.forumBackground, for: .navigationBar)
-            .toolbarBackground(Color.forumBackground, for: .bottomBar)
-            .toolbarBackground(.visible, for: .bottomBar)
             .alert("post_failed".localized(), isPresented: Binding(
                 get: { postErrorMessage != nil },
                 set: { if !$0 { postErrorMessage = nil } }
